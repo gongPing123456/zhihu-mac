@@ -5,8 +5,13 @@ struct LoginSheetView: View {
     @EnvironmentObject private var state: AppState
     @Environment(\.dismiss) private var dismiss
     @State private var latestCookies: [HTTPCookie] = []
-    @State private var statusMessage = "请在下方网页完成知乎登录，然后点击“验证登录”。"
+    @State private var statusMessage = "请在下方网页完成知乎登录，成功后会自动生效。"
     @State private var isVerifying = false
+    let onLoginSuccess: (() -> Void)?
+
+    init(onLoginSuccess: (() -> Void)? = nil) {
+        self.onLoginSuccess = onLoginSuccess
+    }
 
     var body: some View {
         VStack(spacing: 10) {
@@ -23,22 +28,16 @@ struct LoginSheetView: View {
 
             LoginWebView { cookies in
                 latestCookies = cookies
+                let hasAuthCookie = cookies.contains { $0.name == "z_c0" || $0.name == "d_c0" }
+                if hasAuthCookie {
+                    Task { await verifyLogin() }
+                }
             }
             .frame(minHeight: 460)
 
             HStack {
                 Button("验证登录") {
-                    Task {
-                        isVerifying = true
-                        let err = await state.completeLogin(with: latestCookies)
-                        isVerifying = false
-                        if let err {
-                            statusMessage = err
-                        } else {
-                            statusMessage = "登录成功：\(state.username)"
-                            dismiss()
-                        }
-                    }
+                    Task { await verifyLogin() }
                 }
                 .disabled(isVerifying)
 
@@ -51,6 +50,21 @@ struct LoginSheetView: View {
         }
         .padding(14)
         .frame(minWidth: 900, minHeight: 620)
+    }
+
+    private func verifyLogin() async {
+        if isVerifying { return }
+        guard !latestCookies.isEmpty else { return }
+        isVerifying = true
+        let err = await state.completeLogin(with: latestCookies)
+        isVerifying = false
+        if let err {
+            statusMessage = err
+        } else {
+            statusMessage = "登录成功：\(state.username)"
+            onLoginSuccess?()
+            dismiss()
+        }
     }
 }
 

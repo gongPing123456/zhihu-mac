@@ -129,9 +129,19 @@ private struct ContentView: View {
                     Task { await state.ensureHotSearchDefaultLoaded() }
                 }
             }
-            .sheet(isPresented: $showLoginSheet) {
-                LoginSheetView()
-                    .environmentObject(state)
+            .sheet(isPresented: $showLoginSheet, onDismiss: {
+                Task {
+                    await state.restoreLoginStatus()
+                    state.ensureSelection()
+                }
+            }) {
+                LoginSheetView(onLoginSuccess: {
+                    Task {
+                        await state.restoreLoginStatus()
+                        state.ensureSelection()
+                    }
+                })
+                .environmentObject(state)
             }
     }
 }

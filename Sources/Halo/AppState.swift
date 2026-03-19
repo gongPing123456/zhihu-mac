@@ -34,7 +34,6 @@ final class AppState: ObservableObject {
     init() {
         SessionStore.loadCookiesToSharedStorage()
         if let savedName = SessionStore.loadUsername(), !savedName.isEmpty {
-            isLoggedIn = true
             username = savedName
         }
         favoriteItems = favoritesStore.load()
@@ -362,9 +361,9 @@ final class AppState: ObservableObject {
             username = name
             SessionStore.saveUsername(name)
         } catch {
-            if !isLoggedIn {
-                username = "未登录"
-            }
+            isLoggedIn = false
+            username = "未登录"
+            SessionStore.saveUsername("")
         }
     }
 

@@ -27,6 +27,22 @@ struct HTMLWebView: NSViewRepresentable {
             <meta name="referrer" content="no-referrer"/>
             <style>
                 body { font-family: -apple-system; font-size: \(bodyFontSize)px; line-height: 1.7; color: #1f2937; margin: 0; padding: 0; }
+                /* 强制覆盖知乎正文默认窄版容器，避免在某些窗口比例下看起来不铺满 */
+                .RichContent,
+                .RichContent-inner,
+                .Post-RichTextContainer,
+                .RichText,
+                .RichText.ztext {
+                    width: 100% !important;
+                    max-width: none !important;
+                    margin: 0 !important;
+                    padding: 0 !important;
+                    box-sizing: border-box !important;
+                }
+                .RichText p,
+                .RichText div {
+                    max-width: none !important;
+                }
                 img { max-width: 100%; height: auto; border-radius: 8px; }
                 pre { white-space: pre-wrap; background: #f3f4f6; padding: 10px; border-radius: 6px; overflow-x: auto; }
                 blockquote { border-left: 3px solid #4b5563; margin: 10px 0; padding: 8px 12px; color: #374151; background: #f3f4f6; border-radius: 6px; }

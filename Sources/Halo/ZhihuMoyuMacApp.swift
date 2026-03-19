@@ -2,19 +2,23 @@ import SwiftUI
 import AppKit
 
 @main
-struct ZhihuMoyuMacApp: App {
+struct HaloApp: App {
     @StateObject private var state = AppState()
 
     init() {
         NSApplication.shared.setActivationPolicy(.regular)
         NSApplication.shared.activate(ignoringOtherApps: true)
+        if let iconURL = Bundle.main.url(forResource: "HaloIcon", withExtension: "png"),
+           let icon = NSImage(contentsOf: iconURL) {
+            NSApplication.shared.applicationIconImage = icon
+        }
     }
 
     var body: some Scene {
-        WindowGroup("halo") {
+        WindowGroup("Halo") {
             ContentView()
                 .environmentObject(state)
-                .frame(minWidth: 680, minHeight: 460)
+                .frame(minWidth: 680, minHeight: 560)
                 .onAppear {
                     NSApplication.shared.activate(ignoringOtherApps: true)
                 }
@@ -23,6 +27,7 @@ struct ZhihuMoyuMacApp: App {
                     state.ensureSelection()
                 }
         }
+        .defaultSize(width: 1280, height: 860)
         .windowStyle(.hiddenTitleBar)
         .windowToolbarStyle(.unifiedCompact)
         .commands {
@@ -540,22 +545,20 @@ private struct DetailView: View {
 
     private func contentPane(item: FeedItem) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
+            (
                 Text(item.title)
-                    .font(.system(size: z(22), weight: .bold))
-                    .lineSpacing(6)
-                Spacer()
-            }
+                    .font(.system(size: z(18), weight: .semibold))
+                + Text("  \(item.authorName)  👍 \(item.voteCount)  💬 \(item.commentCount)")
+                    .font(.system(size: z(13), weight: .medium))
+                    .foregroundStyle(.secondary)
+            )
+            .lineSpacing(4)
+            .fixedSize(horizontal: false, vertical: true)
 
-            HStack(spacing: 8) {
-                Text(item.authorName).foregroundStyle(.secondary)
-                Text("👍 \(item.voteCount)").foregroundStyle(.secondary)
-                Text("💬 \(item.commentCount)").foregroundStyle(.secondary)
-                if let url = item.webURL {
-                    Link("原文", destination: url)
-                }
+            if let url = item.webURL {
+                Link("原文", destination: url)
+                    .font(.system(size: z(13)))
             }
-            .font(.system(size: z(13)))
 
             if !item.htmlContent.isEmpty {
                 HTMLWebView(html: item.htmlContent, textScale: state.userZoomScale)
@@ -570,10 +573,9 @@ private struct DetailView: View {
                 .scrollIndicators(.hidden)
             }
         }
-        .padding(.horizontal, 24)
+        .padding(.horizontal, 18)
         .padding(.vertical, 16)
-        .frame(maxWidth: 760, maxHeight: .infinity, alignment: .topLeading)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private var commentsPane: some View {

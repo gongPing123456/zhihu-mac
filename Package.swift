@@ -2,20 +2,23 @@
 import PackageDescription
 
 let package = Package(
-    name: "ZhihuMoyuMac",
+    name: "Halo",
     platforms: [
         .macOS(.v14),
     ],
     products: [
         .executable(
-            name: "ZhihuMoyuMac",
-            targets: ["ZhihuMoyuMac"]
+            name: "Halo",
+            targets: ["Halo"]
         ),
     ],
     targets: [
         .executableTarget(
-            name: "ZhihuMoyuMac",
-            path: "Sources/ZhihuMoyuMac"
+            name: "Halo",
+            path: "Sources/Halo",
+            resources: [
+                .process("Resources")
+            ]
         ),
     ]
 )

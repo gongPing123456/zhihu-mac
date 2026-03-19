@@ -1,4 +1,4 @@
-# ZhihuMoyuMac
+# Halo
 
 一个简洁的 macOS 摸鱼客户端（SwiftUI）。
 
@@ -16,7 +16,7 @@
 
 ```bash
 cd /Users/gongping/Documents/随便/ZhihuMoyuMac
-swift run
+swift run Halo
 ```
 
 也可以直接用 Xcode 打开 `Package.swift` 运行。

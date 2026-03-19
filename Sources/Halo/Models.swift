@@ -46,6 +46,10 @@ struct CommentItem: Identifiable, Codable {
     let contentHTML: String
     let plainText: String
     let childCommentCount: Int
+
+    var imageURLs: [URL] {
+        contentHTML.extractImageURLs()
+    }
 }
 
 enum SidebarTab: String, CaseIterable, Identifiable {
@@ -74,5 +78,61 @@ extension String {
         return withoutEntities
             .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    func extractImageURLs() -> [URL] {
+        let patterns = [
+            #"data-original\s*=\s*"([^"]+)""#,
+            #"data-actualsrc\s*=\s*"([^"]+)""#,
+            #"data-src\s*=\s*"([^"]+)""#,
+            #"src\s*=\s*"([^"]+)""#,
+            #"href\s*=\s*"([^"]+)""#
+        ]
+        var result: [URL] = []
+        var seen: Set<String> = []
+        let range = NSRange(location: 0, length: utf16.count)
+
+        for pattern in patterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { continue }
+            for match in regex.matches(in: self, options: [], range: range) {
+                guard match.numberOfRanges >= 2,
+                      let valueRange = Range(match.range(at: 1), in: self) else { continue }
+                var raw = String(self[valueRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+                if raw.isEmpty || raw.hasPrefix("data:") { continue }
+                if raw.hasPrefix("//") { raw = "https:" + raw }
+                raw = raw.replacingOccurrences(of: "&amp;", with: "&")
+                guard let url = URL(string: raw) else { continue }
+                guard looksLikeImageURL(url) else { continue }
+                let key = url.absoluteString
+                if seen.contains(key) { continue }
+                seen.insert(key)
+                result.append(url)
+            }
+        }
+        return result
+    }
+
+    private func looksLikeImageURL(_ url: URL) -> Bool {
+        guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else {
+            return false
+        }
+        let path = url.path.lowercased()
+        if path.hasSuffix(".jpg") || path.hasSuffix(".jpeg") ||
+            path.hasSuffix(".png") || path.hasSuffix(".gif") ||
+            path.hasSuffix(".webp") || path.hasSuffix(".heic") ||
+            path.hasSuffix(".bmp") || path.hasSuffix(".svg") {
+            return true
+        }
+
+        if let host = url.host?.lowercased(), host.contains("zhimg.com") || host.contains("zhihu.com") {
+            return true
+        }
+
+        let query = url.query?.lowercased() ?? ""
+        if query.contains("image") || query.contains("img") || query.contains("pic") {
+            return true
+        }
+
+        return false
     }
 }

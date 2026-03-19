@@ -601,6 +601,7 @@ private struct DetailView: View {
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .textSelection(.enabled)
         .scrollIndicators(.hidden)
         .background(Color(nsColor: .controlBackgroundColor))
     }
@@ -625,6 +626,7 @@ private struct CommentsView: View {
                 commentCard(comment)
             }
         }
+        .textSelection(.enabled)
     }
 
     @ViewBuilder
@@ -637,6 +639,10 @@ private struct CommentsView: View {
                 .font(.system(size: z(16)))
                 .lineSpacing(4)
                 .fixedSize(horizontal: false, vertical: true)
+
+            if !comment.imageURLs.isEmpty {
+                commentImages(comment.imageURLs, scaleBase: z(1))
+            }
 
             childCommentsSection(for: comment)
         }
@@ -663,6 +669,9 @@ private struct CommentsView: View {
                         Text(child.plainText)
                             .font(.system(size: z(14)))
                             .lineSpacing(3)
+                        if !child.imageURLs.isEmpty {
+                            commentImages(child.imageURLs, scaleBase: z(0.95))
+                        }
                     }
                     .padding(.vertical, 8)
                     .padding(.horizontal, 10)
@@ -683,6 +692,108 @@ private struct CommentsView: View {
                 }
                 .buttonStyle(.link)
             }
+        }
+    }
+
+    @ViewBuilder
+    private func commentImages(_ urls: [URL], scaleBase: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(urls, id: \.absoluteString) { url in
+                HoverZoomAsyncImage(url: url, scaleBase: scaleBase)
+                    .frame(maxWidth: min(520, NSScreen.main?.frame.width ?? 520), alignment: .leading)
+            }
+        }
+        .padding(.top, 4)
+    }
+}
+
+private struct HoverZoomAsyncImage: View {
+    let url: URL
+    let scaleBase: CGFloat
+    @StateObject private var loader: ZhihuImageLoader
+    @State private var isHovering = false
+
+    init(url: URL, scaleBase: CGFloat) {
+        self.url = url
+        self.scaleBase = scaleBase
+        _loader = StateObject(wrappedValue: ZhihuImageLoader(url: url))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let image = loader.image {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFit()
+                    .scaleEffect(isHovering ? max(1.08, scaleBase * 1.08) : 1, anchor: .center)
+                    .shadow(color: .black.opacity(isHovering ? 0.18 : 0), radius: isHovering ? 10 : 0, x: 0, y: 5)
+                    .animation(.easeOut(duration: 0.16), value: isHovering)
+            } else if loader.failed {
+                Link("查看图片", destination: url)
+                    .font(.system(size: 12, weight: .medium))
+            } else {
+                ProgressView()
+                    .controlSize(.small)
+                    .padding(.vertical, 8)
+            }
+        }
+        .task(id: url) {
+            await loader.loadIfNeeded()
+        }
+        .onHover { hovering in
+            isHovering = hovering
+        }
+        .padding(4)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color(nsColor: .windowBackgroundColor))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.secondary.opacity(0.12), lineWidth: 0.8)
+        )
+        .clipped()
+    }
+}
+
+@MainActor
+private final class ZhihuImageLoader: ObservableObject {
+    @Published var image: NSImage?
+    @Published var failed = false
+
+    private let url: URL
+    private static let cache = NSCache<NSString, NSImage>()
+
+    init(url: URL) {
+        self.url = url
+    }
+
+    func loadIfNeeded() async {
+        if image != nil || failed { return }
+        let key = url.absoluteString as NSString
+        if let cached = Self.cache.object(forKey: key) {
+            image = cached
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 20
+        request.setValue("https://www.zhihu.com/", forHTTPHeaderField: "Referer")
+        request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 13_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36", forHTTPHeaderField: "User-Agent")
+        request.setValue("image/avif,image/webp,image/apng,image/*,*/*;q=0.8", forHTTPHeaderField: "Accept")
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  (200 ... 299).contains(httpResponse.statusCode),
+                  let decoded = NSImage(data: data) else {
+                failed = true
+                return
+            }
+            Self.cache.setObject(decoded, forKey: key)
+            image = decoded
+        } catch {
+            failed = true
         }
     }
 }

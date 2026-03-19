@@ -9,14 +9,17 @@ enum SessionStore {
             (cookie.domain.contains("zhihu.com") || cookie.domain.contains(".zhihu.com")) && !cookie.name.isEmpty
         }
         let serialized: [[String: Any]] = zhihuCookies.map { cookie in
-            [
+            var item: [String: Any] = [
                 "name": cookie.name,
                 "value": cookie.value,
                 "domain": cookie.domain,
                 "path": cookie.path,
-                "expires": cookie.expiresDate?.timeIntervalSince1970 as Any,
-                "secure": cookie.isSecure,
+                "secure": cookie.isSecure
             ]
+            if let expires = cookie.expiresDate?.timeIntervalSince1970 {
+                item["expires"] = expires
+            }
+            return item
         }
         UserDefaults.standard.set(serialized, forKey: cookiesKey)
         loadCookiesToSharedStorage()

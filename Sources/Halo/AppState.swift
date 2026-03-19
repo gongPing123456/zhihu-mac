@@ -27,6 +27,7 @@ final class AppState: ObservableObject {
 
     private var homeNextURL: String?
     private var homeReachedEnd = false
+    private var fullContentPrefetchingIDs: Set<String> = []
 
     private let api = ZhihuAPI()
     private let favoritesStore = FavoritesStore()
@@ -148,8 +149,9 @@ final class AppState: ObservableObject {
         guard let item else { return }
         Task {
             await loadComments(for: item)
-            await loadFullContent(for: item)
+            await loadFullContent(for: item, isForSelectedItem: true)
         }
+        Task { await prefetchWindowAroundSelection() }
     }
 
     func loadComments(for item: FeedItem) async {
@@ -185,26 +187,31 @@ final class AppState: ObservableObject {
         favoriteItems.contains { $0.id == item.id }
     }
 
-    private func loadFullContent(for item: FeedItem) async {
+    private func loadFullContent(for item: FeedItem, isForSelectedItem: Bool) async {
+        if item.htmlContent.isEmpty == false { return }
+        if fullContentPrefetchingIDs.contains(item.id) { return }
+        fullContentPrefetchingIDs.insert(item.id)
+        defer { fullContentPrefetchingIDs.remove(item.id) }
+
         do {
             guard let full = try await api.fetchFullContent(for: item), !full.isEmpty else { return }
-            guard var current = selectedItem, current.id == item.id else { return }
-            if current.htmlContent.count >= full.count { return }
-            current = FeedItem(
-                id: current.id,
-                contentType: current.contentType,
-                contentId: current.contentId,
-                questionId: current.questionId,
-                title: current.title,
-                excerpt: current.excerpt,
+            let updated = FeedItem(
+                id: item.id,
+                contentType: item.contentType,
+                contentId: item.contentId,
+                questionId: item.questionId,
+                title: item.title,
+                excerpt: item.excerpt,
                 htmlContent: full,
-                authorName: current.authorName,
-                authorAvatar: current.authorAvatar,
-                voteCount: current.voteCount,
-                commentCount: current.commentCount
+                authorName: item.authorName,
+                authorAvatar: item.authorAvatar,
+                voteCount: item.voteCount,
+                commentCount: item.commentCount
             )
-            selectedItem = current
-            replaceItemInCaches(with: current)
+            replaceItemInCaches(with: updated)
+            if isForSelectedItem, let current = selectedItem, current.id == item.id {
+                selectedItem = updated
+            }
         } catch {
             // 忽略补拉失败，不影响主流程
         }
@@ -214,9 +221,32 @@ final class AppState: ObservableObject {
         if let idx = feedItems.firstIndex(where: { $0.id == item.id }) {
             feedItems[idx] = item
         }
+        if let idx = hotListContentItems.firstIndex(where: { $0.id == item.id }) {
+            hotListContentItems[idx] = item
+        }
+        if let idx = searchResultItems.firstIndex(where: { $0.id == item.id }) {
+            searchResultItems[idx] = item
+        }
         if let idx = favoriteItems.firstIndex(where: { $0.id == item.id }) {
             favoriteItems[idx] = item
             favoritesStore.save(favoriteItems)
+        }
+    }
+
+    private func prefetchWindowAroundSelection() async {
+        let candidates = items(for: selectedTab)
+        guard !candidates.isEmpty,
+              let current = selectedItem,
+              let idx = candidates.firstIndex(where: { $0.id == current.id }) else {
+            return
+        }
+
+        let lower = max(0, idx - 2)
+        let upper = min(candidates.count - 1, idx + 7)
+        for i in lower ... upper {
+            let item = candidates[i]
+            let isSelected = (item.id == current.id)
+            await loadFullContent(for: item, isForSelectedItem: isSelected)
         }
     }
 

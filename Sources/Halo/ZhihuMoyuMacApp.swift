@@ -61,6 +61,13 @@ private struct ContentView: View {
     var body: some View {
         ReaderWorkspace()
             .background(WindowConfigurator())
+            .modifier(
+                NavigationHotkeysModifier(
+                    enabled: !showLoginSheet,
+                    onPrevious: { state.moveSelection(step: -1) },
+                    onNext: { state.moveSelection(step: 1) }
+                )
+            )
             .toolbar {
                 ToolbarItemGroup(placement: .navigation) {
                     ForEach(topTabs) { tab in
@@ -143,6 +150,66 @@ private struct ContentView: View {
                 })
                 .environmentObject(state)
             }
+    }
+}
+
+private final class LocalKeyMonitorStore: ObservableObject {
+    private var token: Any?
+
+    func start(handler: @escaping (NSEvent) -> NSEvent?) {
+        stop()
+        token = NSEvent.addLocalMonitorForEvents(matching: [.keyDown], handler: handler)
+    }
+
+    func stop() {
+        if let token {
+            NSEvent.removeMonitor(token)
+            self.token = nil
+        }
+    }
+
+    deinit {
+        stop()
+    }
+}
+
+private struct NavigationHotkeysModifier: ViewModifier {
+    let enabled: Bool
+    let onPrevious: () -> Void
+    let onNext: () -> Void
+
+    @StateObject private var monitorStore = LocalKeyMonitorStore()
+
+    func body(content: Content) -> some View {
+        content
+            .onAppear {
+                installMonitor()
+            }
+            .onChange(of: enabled) { _, _ in
+                installMonitor()
+            }
+            .onDisappear {
+                monitorStore.stop()
+            }
+    }
+
+    private func installMonitor() {
+        monitorStore.start { event in
+            guard enabled else { return event }
+            let blockedModifiers = event.modifierFlags.intersection([.command, .option, .control, .function])
+            guard blockedModifiers.isEmpty else { return event }
+
+            let key = event.charactersIgnoringModifiers?.lowercased() ?? ""
+            if key == "a" || event.keyCode == 123 {
+                onPrevious()
+                return nil
+            }
+            if key == "d" || event.keyCode == 124 {
+                onNext()
+                return nil
+            }
+            return event
+        }
     }
 }
 

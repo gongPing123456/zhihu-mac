@@ -28,6 +28,7 @@ final class AppState: ObservableObject {
     private var homeNextURL: String?
     private var homeReachedEnd = false
     private var fullContentPrefetchingIDs: Set<String> = []
+    private var lastSelectedItemIDByTab: [SidebarTab: String] = [:]
 
     private let api = ZhihuAPI()
     private let favoritesStore = FavoritesStore()
@@ -144,6 +145,9 @@ final class AppState: ObservableObject {
 
     func select(_ item: FeedItem?) {
         selectedItem = item
+        if let item {
+            lastSelectedItemIDByTab[selectedTab] = item.id
+        }
         comments = []
         childCommentsByParent = [:]
         guard let item else { return }
@@ -260,6 +264,13 @@ final class AppState: ObservableObject {
         }
 
         if let current = selectedItem, candidates.contains(where: { $0.id == current.id }) {
+            lastSelectedItemIDByTab[selectedTab] = current.id
+            return
+        }
+
+        if let rememberedID = lastSelectedItemIDByTab[selectedTab],
+           let remembered = candidates.first(where: { $0.id == rememberedID }) {
+            select(remembered)
             return
         }
         select(candidates.first)

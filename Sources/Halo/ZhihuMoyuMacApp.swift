@@ -70,21 +70,9 @@ private struct ContentView: View {
             )
             .toolbar {
                 ToolbarItemGroup(placement: .navigation) {
-                    ForEach(topTabs) { tab in
-                        Button {
-                            state.selectedTab = tab
-                            state.ensureSelection()
-                        } label: {
-                            Text(tab.rawValue)
-                                .font(.system(size: 13, weight: state.selectedTab == tab ? .semibold : .regular))
-                                .padding(.vertical, 5)
-                                .padding(.horizontal, 10)
-                                .background(
-                                    Capsule()
-                                        .fill(state.selectedTab == tab ? Color.accentColor.opacity(0.18) : Color.clear)
-                                )
-                        }
-                        .buttonStyle(.plain)
+                    HomeTabControl()
+                    ForEach(topTabs.filter { $0 != .home }) { tab in
+                        TopTabButton(tab: tab)
                     }
                 }
 
@@ -108,6 +96,13 @@ private struct ContentView: View {
                     Button("下一页") { state.moveSelection(step: 1) }
                         .controlSize(.small)
                         .buttonStyle(.bordered)
+
+                    Button("刷新") {
+                        Task { await state.refreshCurrentTab() }
+                    }
+                    .controlSize(.small)
+                    .buttonStyle(.bordered)
+                    .disabled(state.isLoading || state.isLoadingMoreHome)
 
                     if state.isLoggedIn {
                         HStack(spacing: 6) {
@@ -150,6 +145,72 @@ private struct ContentView: View {
                 })
                 .environmentObject(state)
             }
+    }
+}
+
+private struct TopTabButton: View {
+    @EnvironmentObject private var state: AppState
+    let tab: SidebarTab
+
+    var body: some View {
+        Button {
+            state.selectedTab = tab
+            state.ensureSelection()
+        } label: {
+            Text(tab.rawValue)
+                .font(.system(size: 13, weight: state.selectedTab == tab ? .semibold : .regular))
+                .padding(.vertical, 5)
+                .padding(.horizontal, 10)
+                .background(
+                    Capsule()
+                        .fill(state.selectedTab == tab ? Color.accentColor.opacity(0.18) : Color.clear)
+                )
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct HomeTabControl: View {
+    @EnvironmentObject private var state: AppState
+    @State private var isHovering = false
+
+    var body: some View {
+        HStack(spacing: 4) {
+            TopTabButton(tab: .home)
+
+            if isHovering {
+                Menu {
+                    ForEach(HomeReadMode.allCases) { mode in
+                        Button {
+                            state.setHomeReadMode(mode)
+                        } label: {
+                            if state.homeReadMode == mode {
+                                Label(mode.rawValue, systemImage: "checkmark")
+                            } else {
+                                Text(mode.rawValue)
+                            }
+                        }
+                    }
+                } label: {
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 6)
+                        .background(
+                            Capsule()
+                                .fill(Color(nsColor: .controlBackgroundColor))
+                        )
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("当前模式：\(state.homeReadMode.rawValue)")
+            }
+        }
+        .contentShape(Rectangle())
+        .onHover { hovering in
+            isHovering = hovering
+        }
     }
 }
 

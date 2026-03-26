@@ -33,10 +33,19 @@ actor ZhihuAPI {
         return decoder
     }()
 
-    func fetchRecommendedFeed(nextURL: String? = nil) async throws -> RecommendPage {
+    private let anonymousSession: URLSession = {
+        let config = URLSessionConfiguration.ephemeral
+        config.httpShouldSetCookies = false
+        config.httpCookieAcceptPolicy = .never
+        config.httpCookieStorage = nil
+        config.urlCache = nil
+        return URLSession(configuration: config)
+    }()
+
+    func fetchRecommendedFeed(nextURL: String? = nil, includeLoginInfo: Bool = true) async throws -> RecommendPage {
         let urlString = nextURL ?? "https://api.zhihu.com/topstory/recommend"
-        let request = try makeRequest(urlString: urlString)
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let request = try makeRequest(urlString: urlString, includeLoginInfo: includeLoginInfo)
+        let (data, response) = try await data(for: request, includeLoginInfo: includeLoginInfo)
         try validate(response)
         return try parseRecommendFeed(data: data)
     }
@@ -48,12 +57,12 @@ actor ZhihuAPI {
         return try parseHotSearch(data: data)
     }
 
-    func fetchRootComments(for item: FeedItem) async throws -> [CommentItem] {
+    func fetchRootComments(for item: FeedItem, includeLoginInfo: Bool = true) async throws -> [CommentItem] {
         guard let path = commentPath(for: item) else { return [] }
 
         let urlString = "https://www.zhihu.com/api/v4/comment_v5/\(path)/root_comment?limit=20"
-        let request = try makeRequest(urlString: urlString)
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let request = try makeRequest(urlString: urlString, includeLoginInfo: includeLoginInfo)
+        let (data, response) = try await data(for: request, includeLoginInfo: includeLoginInfo)
         try validate(response)
         let payload = try decoder.decode(CommentResponse.self, from: data)
         return payload.data.map {
@@ -67,7 +76,7 @@ actor ZhihuAPI {
         }
     }
 
-    func fetchFullContent(for item: FeedItem) async throws -> String? {
+    func fetchFullContent(for item: FeedItem, includeLoginInfo: Bool = true) async throws -> String? {
         let urlString: String
         switch item.contentType {
         case .answer:
@@ -80,8 +89,8 @@ actor ZhihuAPI {
             return nil
         }
 
-        let request = try makeRequest(urlString: urlString)
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let request = try makeRequest(urlString: urlString, includeLoginInfo: includeLoginInfo)
+        let (data, response) = try await data(for: request, includeLoginInfo: includeLoginInfo)
         try validate(response)
 
         guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
@@ -96,10 +105,10 @@ actor ZhihuAPI {
         return nil
     }
 
-    func fetchChildComments(commentID: String) async throws -> [CommentItem] {
+    func fetchChildComments(commentID: String, includeLoginInfo: Bool = true) async throws -> [CommentItem] {
         let urlString = "https://www.zhihu.com/api/v4/comment_v5/comment/\(commentID)/child_comment?limit=20"
-        let request = try makeRequest(urlString: urlString)
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let request = try makeRequest(urlString: urlString, includeLoginInfo: includeLoginInfo)
+        let (data, response) = try await data(for: request, includeLoginInfo: includeLoginInfo)
         try validate(response)
         let payload = try decoder.decode(CommentResponse.self, from: data)
         return payload.data.map {
@@ -172,14 +181,24 @@ actor ZhihuAPI {
         }
     }
 
-    private func makeRequest(urlString: String) throws -> URLRequest {
+    private func makeRequest(urlString: String, includeLoginInfo: Bool = true) throws -> URLRequest {
         guard let url = URL(string: urlString) else { throw APIError.invalidURL }
         var request = URLRequest(url: url)
         request.setValue("Mozilla/5.0", forHTTPHeaderField: "User-Agent")
-        if let cookie = SessionStore.cookieHeader(), !cookie.isEmpty {
+        request.httpShouldHandleCookies = includeLoginInfo
+        if includeLoginInfo, let cookie = SessionStore.cookieHeader(), !cookie.isEmpty {
             request.setValue(cookie, forHTTPHeaderField: "Cookie")
+        } else {
+            request.setValue(nil, forHTTPHeaderField: "Cookie")
         }
         return request
+    }
+
+    private func data(for request: URLRequest, includeLoginInfo: Bool) async throws -> (Data, URLResponse) {
+        if includeLoginInfo {
+            return try await URLSession.shared.data(for: request)
+        }
+        return try await anonymousSession.data(for: request)
     }
 
     private func parseRecommendFeed(data: Data) throws -> RecommendPage {

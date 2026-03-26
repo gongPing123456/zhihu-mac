@@ -6,6 +6,7 @@ final class AppState: ObservableObject {
     @Published var isLoggedIn = false
     @Published var username = "未登录"
     @Published var selectedTab: SidebarTab = .home
+    @Published var homeReadMode: HomeReadMode = .withToken
     @Published var selectedHotSearchQuery: String?
     @Published var selectedHotListQuestionID: Int64?
     @Published var activeSearchQuery: String?
@@ -38,6 +39,7 @@ final class AppState: ObservableObject {
         if let savedName = SessionStore.loadUsername(), !savedName.isEmpty {
             username = savedName
         }
+        homeReadMode = SessionStore.loadHomeReadMode()
         favoriteItems = favoritesStore.load()
     }
 
@@ -95,12 +97,26 @@ final class AppState: ObservableObject {
         }
     }
 
+    func refreshCurrentTab() async {
+        switch selectedTab {
+        case .home:
+            clearHomeStateForFullRefresh()
+            await refreshFeed()
+        case .hotList:
+            clearHotListStateForFullRefresh()
+            await refreshHotList()
+        case .hotSearch:
+            clearHotSearchStateForFullRefresh()
+            await refreshHotSearch()
+        }
+    }
+
     func refreshFeed() async {
         isLoading = true
         defer { isLoading = false }
         do {
-            let page = try await api.fetchRecommendedFeed()
-            feedItems = page.items
+            let page = try await api.fetchRecommendedFeed(includeLoginInfo: shouldIncludeLoginInfoForHomeRequests)
+            feedItems = deduplicateFeedItems(page.items)
             homeNextURL = page.nextURL
             homeReachedEnd = page.isEnd
             if activeSearchQuery == nil {
@@ -115,7 +131,7 @@ final class AppState: ObservableObject {
 
     func refreshHotSearch() async {
         do {
-            hotSearchItems = try await api.fetchHotSearch()
+            hotSearchItems = deduplicateHotSearchItems(try await api.fetchHotSearch())
             if let selected = selectedHotSearchQuery,
                !hotSearchItems.contains(where: { $0.query == selected }) {
                 selectedHotSearchQuery = nil
@@ -129,7 +145,7 @@ final class AppState: ObservableObject {
 
     func refreshHotList() async {
         do {
-            hotListItems = try await api.fetchHotList()
+            hotListItems = deduplicateFeedItems(try await api.fetchHotList())
             if let qid = selectedHotListQuestionID,
                !hotListItems.contains(where: { $0.contentId == qid }) {
                 selectedHotListQuestionID = nil
@@ -151,16 +167,17 @@ final class AppState: ObservableObject {
         comments = []
         childCommentsByParent = [:]
         guard let item else { return }
+        let includeLoginInfo = includeLoginInfo(for: item, in: selectedTab)
         Task {
-            await loadComments(for: item)
-            await loadFullContent(for: item, isForSelectedItem: true)
+            await loadComments(for: item, includeLoginInfo: includeLoginInfo)
+            await loadFullContent(for: item, isForSelectedItem: true, includeLoginInfo: includeLoginInfo)
         }
         Task { await prefetchWindowAroundSelection() }
     }
 
-    func loadComments(for item: FeedItem) async {
+    func loadComments(for item: FeedItem, includeLoginInfo: Bool = true) async {
         do {
-            comments = try await api.fetchRootComments(for: item)
+            comments = try await api.fetchRootComments(for: item, includeLoginInfo: includeLoginInfo)
             errorMessage = nil
         } catch {
             comments = []
@@ -171,7 +188,10 @@ final class AppState: ObservableObject {
     func loadChildComments(for parentCommentID: String) async {
         if childCommentsByParent[parentCommentID] != nil { return }
         do {
-            let children = try await api.fetchChildComments(commentID: parentCommentID)
+            let children = try await api.fetchChildComments(
+                commentID: parentCommentID,
+                includeLoginInfo: selectedTab == .home ? shouldIncludeLoginInfoForHomeRequests : true
+            )
             childCommentsByParent[parentCommentID] = children
         } catch {
             errorMessage = "子评论加载失败：\(error.localizedDescription)"
@@ -191,14 +211,14 @@ final class AppState: ObservableObject {
         favoriteItems.contains { $0.id == item.id }
     }
 
-    private func loadFullContent(for item: FeedItem, isForSelectedItem: Bool) async {
+    private func loadFullContent(for item: FeedItem, isForSelectedItem: Bool, includeLoginInfo: Bool = true) async {
         if item.htmlContent.isEmpty == false { return }
         if fullContentPrefetchingIDs.contains(item.id) { return }
         fullContentPrefetchingIDs.insert(item.id)
         defer { fullContentPrefetchingIDs.remove(item.id) }
 
         do {
-            guard let full = try await api.fetchFullContent(for: item), !full.isEmpty else { return }
+            guard let full = try await api.fetchFullContent(for: item, includeLoginInfo: includeLoginInfo), !full.isEmpty else { return }
             let updated = FeedItem(
                 id: item.id,
                 contentType: item.contentType,
@@ -247,10 +267,11 @@ final class AppState: ObservableObject {
 
         let lower = max(0, idx - 2)
         let upper = min(candidates.count - 1, idx + 7)
+        let includeLoginInfo = includeLoginInfo(for: current, in: selectedTab)
         for i in lower ... upper {
             let item = candidates[i]
             let isSelected = (item.id == current.id)
-            await loadFullContent(for: item, isForSelectedItem: isSelected)
+            await loadFullContent(for: item, isForSelectedItem: isSelected, includeLoginInfo: includeLoginInfo)
         }
     }
 
@@ -320,13 +341,14 @@ final class AppState: ObservableObject {
         isLoadingMoreHome = true
         defer { isLoadingMoreHome = false }
         do {
-            let page = try await api.fetchRecommendedFeed(nextURL: next)
+            let page = try await api.fetchRecommendedFeed(
+                nextURL: next,
+                includeLoginInfo: shouldIncludeLoginInfoForHomeRequests
+            )
             homeNextURL = page.nextURL
             homeReachedEnd = page.isEnd
 
-            let existingIDs = Set(feedItems.map(\.id))
-            let appended = page.items.filter { !existingIDs.contains($0.id) }
-            feedItems.append(contentsOf: appended)
+            feedItems = deduplicateFeedItems(feedItems + page.items)
             errorMessage = nil
         } catch {
             errorMessage = "加载更多失败：\(error.localizedDescription)"
@@ -337,7 +359,7 @@ final class AppState: ObservableObject {
         isLoading = true
         defer { isLoading = false }
         do {
-            let results = try await api.fetchSearchResults(query: query)
+            let results = deduplicateFeedItems(try await api.fetchSearchResults(query: query))
             selectedHotSearchQuery = query
             activeSearchQuery = query
             searchText = query
@@ -384,7 +406,7 @@ final class AppState: ObservableObject {
         isLoading = true
         defer { isLoading = false }
         do {
-            let items = try await api.fetchQuestionFeeds(questionID: questionID)
+            let items = deduplicateFeedItems(try await api.fetchQuestionFeeds(questionID: questionID))
             selectedHotListQuestionID = questionID
             hotListContentItems = items
             errorMessage = items.isEmpty ? "该热点暂无可展示文章（可能需要登录）" : nil
@@ -439,6 +461,97 @@ final class AppState: ObservableObject {
 
     func resetZoom() {
         userZoomScale = 1.0
+    }
+
+    func setHomeReadMode(_ mode: HomeReadMode) {
+        guard homeReadMode != mode else { return }
+        homeReadMode = mode
+        SessionStore.saveHomeReadMode(mode)
+        if selectedTab == .home {
+            Task { await refreshCurrentTab() }
+        }
+    }
+
+    var shouldIncludeLoginInfoForHomeRequests: Bool {
+        homeReadMode == .withToken
+    }
+
+    private func clearHomeStateForFullRefresh() {
+        feedItems = []
+        selectedItem = nil
+        comments = []
+        childCommentsByParent = [:]
+        errorMessage = nil
+        homeNextURL = nil
+        homeReachedEnd = false
+        lastSelectedItemIDByTab[.home] = nil
+        if activeSearchQuery == nil {
+            searchResultItems = []
+        }
+    }
+
+    private func clearHotListStateForFullRefresh() {
+        hotListItems = []
+        hotListContentItems = []
+        selectedHotListQuestionID = nil
+        selectedItem = nil
+        comments = []
+        childCommentsByParent = [:]
+        errorMessage = nil
+        lastSelectedItemIDByTab[.hotList] = nil
+    }
+
+    private func clearHotSearchStateForFullRefresh() {
+        hotSearchItems = []
+        searchResultItems = []
+        selectedHotSearchQuery = nil
+        activeSearchQuery = nil
+        selectedItem = nil
+        comments = []
+        childCommentsByParent = [:]
+        errorMessage = nil
+        lastSelectedItemIDByTab[.hotSearch] = nil
+    }
+
+    private func deduplicateFeedItems(_ items: [FeedItem]) -> [FeedItem] {
+        var result: [FeedItem] = []
+        var indexByID: [String: Int] = [:]
+
+        for item in items {
+            if let existingIndex = indexByID[item.id] {
+                let existing = result[existingIndex]
+                result[existingIndex] = preferredFeedItem(existing: existing, incoming: item)
+            } else {
+                indexByID[item.id] = result.count
+                result.append(item)
+            }
+        }
+
+        return result
+    }
+
+    private func preferredFeedItem(existing: FeedItem, incoming: FeedItem) -> FeedItem {
+        if existing.htmlContent.isEmpty && !incoming.htmlContent.isEmpty {
+            return incoming
+        }
+        if existing.excerpt.isEmpty && !incoming.excerpt.isEmpty {
+            return incoming
+        }
+        return existing
+    }
+
+    private func deduplicateHotSearchItems(_ items: [HotSearchItem]) -> [HotSearchItem] {
+        var seenQueries: Set<String> = []
+        return items.filter { item in
+            seenQueries.insert(item.query).inserted
+        }
+    }
+
+    private func includeLoginInfo(for item: FeedItem, in tab: SidebarTab) -> Bool {
+        if tab == .home, feedItems.contains(where: { $0.id == item.id }) {
+            return shouldIncludeLoginInfoForHomeRequests
+        }
+        return true
     }
 }
 

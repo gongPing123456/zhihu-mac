@@ -3,6 +3,7 @@ import Foundation
 enum SessionStore {
     private static let cookiesKey = "moyu.zhihu.cookies"
     private static let usernameKey = "moyu.zhihu.username"
+    private static let homeReadModeKey = "moyu.zhihu.homeReadMode"
 
     static func saveCookies(_ cookies: [HTTPCookie]) {
         let zhihuCookies = cookies.filter { cookie in
@@ -75,5 +76,17 @@ enum SessionStore {
 
     static func loadUsername() -> String? {
         UserDefaults.standard.string(forKey: usernameKey)
+    }
+
+    static func saveHomeReadMode(_ mode: HomeReadMode) {
+        UserDefaults.standard.set(mode.rawValue, forKey: homeReadModeKey)
+    }
+
+    static func loadHomeReadMode() -> HomeReadMode {
+        guard let rawValue = UserDefaults.standard.string(forKey: homeReadModeKey),
+              let mode = HomeReadMode(rawValue: rawValue) else {
+            return .withToken
+        }
+        return mode
     }
 }

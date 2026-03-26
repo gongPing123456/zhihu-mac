@@ -60,6 +60,13 @@ enum SidebarTab: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+enum HomeReadMode: String, CaseIterable, Codable, Identifiable {
+    case withToken = "携带 token 阅读"
+    case withoutToken = "不携带 token 阅读"
+
+    var id: String { rawValue }
+}
+
 struct HotSearchItem: Identifiable, Codable {
     let id: String
     let query: String

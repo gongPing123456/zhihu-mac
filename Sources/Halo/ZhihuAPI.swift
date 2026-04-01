@@ -27,19 +27,16 @@ actor ZhihuAPI {
         let isEnd: Bool
     }
 
+    struct QuestionFeedPage {
+        let items: [FeedItem]
+        let nextURL: String?
+        let isEnd: Bool
+    }
+
     private let decoder: JSONDecoder = {
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
         return decoder
-    }()
-
-    private let anonymousSession: URLSession = {
-        let config = URLSessionConfiguration.ephemeral
-        config.httpShouldSetCookies = false
-        config.httpCookieAcceptPolicy = .never
-        config.httpCookieStorage = nil
-        config.urlCache = nil
-        return URLSession(configuration: config)
     }()
 
     func fetchRecommendedFeed(nextURL: String? = nil, includeLoginInfo: Bool = true) async throws -> RecommendPage {
@@ -140,8 +137,10 @@ actor ZhihuAPI {
         return try parseHotList(data: data)
     }
 
-    func fetchQuestionFeeds(questionID: Int64) async throws -> [FeedItem] {
-        let request = try makeRequest(urlString: "https://www.zhihu.com/api/v4/questions/\(questionID)/feeds?limit=20")
+    func fetchQuestionFeeds(questionID: Int64, nextURL: String? = nil) async throws -> QuestionFeedPage {
+        let request = try makeRequest(
+            urlString: nextURL ?? "https://www.zhihu.com/api/v4/questions/\(questionID)/feeds?limit=20"
+        )
         let (data, response) = try await URLSession.shared.data(for: request)
         try validate(response)
         return try parseQuestionFeeds(data: data)
@@ -195,10 +194,8 @@ actor ZhihuAPI {
     }
 
     private func data(for request: URLRequest, includeLoginInfo: Bool) async throws -> (Data, URLResponse) {
-        if includeLoginInfo {
-            return try await URLSession.shared.data(for: request)
-        }
-        return try await anonymousSession.data(for: request)
+        _ = includeLoginInfo
+        return try await URLSession.shared.data(for: request)
     }
 
     private func parseRecommendFeed(data: Data) throws -> RecommendPage {
@@ -350,7 +347,7 @@ actor ZhihuAPI {
         }
     }
 
-    private func parseQuestionFeeds(data: Data) throws -> [FeedItem] {
+    private func parseQuestionFeeds(data: Data) throws -> QuestionFeedPage {
         guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw APIError.invalidResponse
         }
@@ -362,7 +359,7 @@ actor ZhihuAPI {
             throw APIError.invalidResponse
         }
 
-        return dataList.compactMap { card in
+        let items: [FeedItem] = dataList.compactMap { card in
             guard let target = card["target"] as? [String: Any] else { return nil }
             let type = (target["type"] as? String) ?? "unknown"
             let contentType = ZhihuContentType(rawValue: type) ?? .unknown
@@ -395,6 +392,16 @@ actor ZhihuAPI {
                 commentCount: commentCount
             )
         }
+
+        let paging = root["paging"] as? [String: Any]
+        let nextURL = paging?["next"] as? String
+        let isEnd: Bool = {
+            if let value = paging?["is_end"] as? Bool { return value }
+            if let value = paging?["isEnd"] as? Bool { return value }
+            return nextURL == nil
+        }()
+
+        return QuestionFeedPage(items: items, nextURL: nextURL, isEnd: isEnd)
     }
 }
 

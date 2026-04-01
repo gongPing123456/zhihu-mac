@@ -24,15 +24,19 @@ final class AppState: ObservableObject {
     @Published var childCommentsByParent: [String: [CommentItem]] = [:]
     @Published var isLoading = false
     @Published var isLoadingMoreHome = false
+    @Published var isLoadingMoreHotList = false
     @Published var errorMessage: String?
 
     private var homeNextURL: String?
     private var homeReachedEnd = false
+    private var hotListContentNextURL: String?
+    private var hotListContentReachedEnd = false
     private var fullContentPrefetchingIDs: Set<String> = []
     private var lastSelectedItemIDByTab: [SidebarTab: String] = [:]
 
     private let api = ZhihuAPI()
     private let favoritesStore = FavoritesStore()
+    private let homeRecommendationSuppressionStore = HomeRecommendationSuppressionStore()
 
     init() {
         SessionStore.loadCookiesToSharedStorage()
@@ -116,7 +120,7 @@ final class AppState: ObservableObject {
         defer { isLoading = false }
         do {
             let page = try await api.fetchRecommendedFeed(includeLoginInfo: shouldIncludeLoginInfoForHomeRequests)
-            feedItems = deduplicateFeedItems(page.items)
+            feedItems = filterHomeRecommendations(page.items, existingItems: [])
             homeNextURL = page.nextURL
             homeReachedEnd = page.isEnd
             if activeSearchQuery == nil {
@@ -316,6 +320,16 @@ final class AppState: ObservableObject {
             return
         }
 
+        if step > 0 &&
+            selectedTab == .hotList &&
+            idx == candidates.count - 1 &&
+            !hotListContentReachedEnd {
+            Task {
+                await loadMoreHotListAndAdvance(fromIndex: idx)
+            }
+            return
+        }
+
         let nextIdx = min(max(0, idx + step), candidates.count - 1)
         if nextIdx != idx {
             select(candidates[nextIdx])
@@ -325,6 +339,14 @@ final class AppState: ObservableObject {
     private func loadMoreHomeAndAdvance(fromIndex oldLastIndex: Int) async {
         await loadMoreHome()
         let candidates = items(for: .home)
+        if candidates.count > oldLastIndex + 1 {
+            select(candidates[oldLastIndex + 1])
+        }
+    }
+
+    private func loadMoreHotListAndAdvance(fromIndex oldLastIndex: Int) async {
+        await loadMoreHotListContents()
+        let candidates = items(for: .hotList)
         if candidates.count > oldLastIndex + 1 {
             select(candidates[oldLastIndex + 1])
         }
@@ -348,7 +370,8 @@ final class AppState: ObservableObject {
             homeNextURL = page.nextURL
             homeReachedEnd = page.isEnd
 
-            feedItems = deduplicateFeedItems(feedItems + page.items)
+            let filteredIncoming = filterHomeRecommendations(page.items, existingItems: feedItems)
+            feedItems.append(contentsOf: filteredIncoming)
             errorMessage = nil
         } catch {
             errorMessage = "加载更多失败：\(error.localizedDescription)"
@@ -406,14 +429,41 @@ final class AppState: ObservableObject {
         isLoading = true
         defer { isLoading = false }
         do {
-            let items = deduplicateFeedItems(try await api.fetchQuestionFeeds(questionID: questionID))
+            let page = try await api.fetchQuestionFeeds(questionID: questionID)
+            let items = deduplicateFeedItems(page.items)
             selectedHotListQuestionID = questionID
             hotListContentItems = items
+            hotListContentNextURL = page.nextURL
+            hotListContentReachedEnd = page.isEnd
             errorMessage = items.isEmpty ? "该热点暂无可展示文章（可能需要登录）" : nil
             ensureSelection()
         } catch {
             hotListContentItems = []
+            hotListContentNextURL = nil
+            hotListContentReachedEnd = false
             errorMessage = "热榜文章加载失败：\(error.localizedDescription)"
+        }
+    }
+
+    func loadMoreHotListContents() async {
+        guard !isLoadingMoreHotList else { return }
+        guard !hotListContentReachedEnd else { return }
+        guard let questionID = selectedHotListQuestionID else { return }
+        guard let next = hotListContentNextURL, !next.isEmpty else {
+            hotListContentReachedEnd = true
+            return
+        }
+
+        isLoadingMoreHotList = true
+        defer { isLoadingMoreHotList = false }
+        do {
+            let page = try await api.fetchQuestionFeeds(questionID: questionID, nextURL: next)
+            hotListContentNextURL = page.nextURL
+            hotListContentReachedEnd = page.isEnd
+            hotListContentItems = deduplicateFeedItems(hotListContentItems + page.items)
+            errorMessage = nil
+        } catch {
+            errorMessage = "热榜文章加载更多失败：\(error.localizedDescription)"
         }
     }
 
@@ -494,6 +544,8 @@ final class AppState: ObservableObject {
         hotListItems = []
         hotListContentItems = []
         selectedHotListQuestionID = nil
+        hotListContentNextURL = nil
+        hotListContentReachedEnd = false
         selectedItem = nil
         comments = []
         childCommentsByParent = [:]
@@ -530,6 +582,41 @@ final class AppState: ObservableObject {
         return result
     }
 
+    private func filterHomeRecommendations(_ incomingItems: [FeedItem], existingItems: [FeedItem]) -> [FeedItem] {
+        let idDeduplicated = deduplicateFeedItems(incomingItems)
+        var result: [FeedItem] = []
+        var existingIDs = Set(existingItems.map(\.id))
+        var seenBatchSignatures = Set(existingItems.compactMap(homeRecommendationSignature))
+
+        for item in idDeduplicated {
+            if existingIDs.contains(item.id) {
+                continue
+            }
+
+            if let signature = homeRecommendationSignature(item) {
+                if seenBatchSignatures.contains(signature) {
+                    continue
+                }
+                if homeRecommendationSuppressionStore.isSuppressed(signature: signature) {
+                    continue
+                }
+                seenBatchSignatures.insert(signature)
+                homeRecommendationSuppressionStore.remember(signature: signature)
+            }
+
+            if let existingIndex = result.firstIndex(where: { $0.id == item.id }) {
+                let existing = result[existingIndex]
+                result[existingIndex] = preferredFeedItem(existing: existing, incoming: item)
+                continue
+            }
+
+            result.append(item)
+            existingIDs.insert(item.id)
+        }
+
+        return result
+    }
+
     private func preferredFeedItem(existing: FeedItem, incoming: FeedItem) -> FeedItem {
         if existing.htmlContent.isEmpty && !incoming.htmlContent.isEmpty {
             return incoming
@@ -545,6 +632,25 @@ final class AppState: ObservableObject {
         return items.filter { item in
             seenQueries.insert(item.query).inserted
         }
+    }
+
+    private func normalizedHomeDedupTitle(_ title: String) -> String {
+        title
+            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+            .replacingOccurrences(of: "\\[[^\\]]+\\]", with: " ", options: .regularExpression)
+            .replacingOccurrences(of: "[^\\p{L}\\p{N}]+", with: " ", options: .regularExpression)
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func homeRecommendationSignature(_ item: FeedItem) -> String? {
+        let normalizedAuthor = item.authorName
+            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedTitle = normalizedHomeDedupTitle(item.title)
+        guard !normalizedAuthor.isEmpty, !normalizedTitle.isEmpty else { return nil }
+        return "\(normalizedAuthor)|\(normalizedTitle)"
     }
 
     private func includeLoginInfo(for item: FeedItem, in tab: SidebarTab) -> Bool {
@@ -566,5 +672,33 @@ private struct FavoritesStore {
     func save(_ items: [FeedItem]) {
         guard let data = try? JSONEncoder().encode(items) else { return }
         UserDefaults.standard.set(data, forKey: key)
+    }
+}
+
+private struct HomeRecommendationSuppressionStore {
+    private let key = "moyu.home.recommendation.suppression"
+    private let calendar = Calendar(identifier: .gregorian)
+    private let retentionDays = 7
+
+    func isSuppressed(signature: String, now: Date = Date()) -> Bool {
+        let map = prunedStorage(now: now)
+        guard let timestamp = map[signature] else { return false }
+        return now.timeIntervalSince1970 - timestamp < TimeInterval(retentionDays * 24 * 60 * 60)
+    }
+
+    func remember(signature: String, now: Date = Date()) {
+        var map = prunedStorage(now: now)
+        map[signature] = now.timeIntervalSince1970
+        UserDefaults.standard.set(map, forKey: key)
+    }
+
+    private func prunedStorage(now: Date) -> [String: TimeInterval] {
+        let raw = UserDefaults.standard.dictionary(forKey: key) as? [String: TimeInterval] ?? [:]
+        let cutoff = calendar.date(byAdding: .day, value: -retentionDays, to: now)?.timeIntervalSince1970 ?? 0
+        let pruned = raw.filter { $0.value >= cutoff }
+        if pruned.count != raw.count {
+            UserDefaults.standard.set(pruned, forKey: key)
+        }
+        return pruned
     }
 }

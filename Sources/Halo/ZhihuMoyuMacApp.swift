@@ -737,7 +737,7 @@ private struct DetailView: View {
 
 private struct CommentsView: View {
     @EnvironmentObject private var state: AppState
-    @State private var collapsedCommentIDs: Set<String> = []
+    @State private var collapsedChildCommentParentIDs: Set<String> = []
     private func z(_ size: CGFloat) -> CGFloat { size * state.userZoomScale }
     private var lineColor: Color {
         Color(nsColor: NSColor(srgbRed: 234/255, green: 234/255, blue: 234/255, alpha: 1))
@@ -757,38 +757,27 @@ private struct CommentsView: View {
         }
         .textSelection(.enabled)
         .onChange(of: state.selectedItem?.id) { _, _ in
-            collapsedCommentIDs = []
+            collapsedChildCommentParentIDs = []
         }
     }
 
     @ViewBuilder
     private func commentCard(_ comment: CommentItem) -> some View {
-        let isCollapsed = collapsedCommentIDs.contains(comment.id)
         VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(comment.authorName)
-                    .font(.system(size: z(15), weight: .semibold))
-                    .foregroundStyle(Color.accentColor)
-                Spacer()
-                Button(isCollapsed ? "展开" : "隐藏") {
-                    toggleCollapsedState(for: comment.id)
-                }
-                .buttonStyle(.borderless)
-                .font(.system(size: z(12), weight: .medium))
+            Text(comment.authorName)
+                .font(.system(size: z(15), weight: .semibold))
+                .foregroundStyle(Color.accentColor)
+
+            Text(comment.plainText.isEmpty ? "（空评论）" : comment.plainText)
+                .font(.system(size: z(16)))
+                .lineSpacing(4)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if !comment.imageURLs.isEmpty {
+                commentImages(comment.imageURLs, scaleBase: z(1))
             }
 
-            if !isCollapsed {
-                Text(comment.plainText.isEmpty ? "（空评论）" : comment.plainText)
-                    .font(.system(size: z(16)))
-                    .lineSpacing(4)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                if !comment.imageURLs.isEmpty {
-                    commentImages(comment.imageURLs, scaleBase: z(1))
-                }
-
-                childCommentsSection(for: comment)
-            }
+            childCommentsSection(for: comment)
         }
         .padding(12)
         .background(
@@ -805,36 +794,59 @@ private struct CommentsView: View {
     @ViewBuilder
     private func childCommentsSection(for comment: CommentItem) -> some View {
         if comment.childCommentCount > 0 {
+            let isCollapsed = collapsedChildCommentParentIDs.contains(comment.id)
             if let children = state.childCommentsByParent[comment.id] {
-                ForEach(children) { child in
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(child.authorName)
-                            .font(.system(size: z(14), weight: .semibold))
-                        Text(child.plainText)
-                            .font(.system(size: z(14)))
-                            .lineSpacing(3)
-                        if !child.imageURLs.isEmpty {
-                            commentImages(child.imageURLs, scaleBase: z(0.95))
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text("子评论 \(children.count) 条")
+                            .font(.system(size: z(13), weight: .medium))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button(isCollapsed ? "展开" : "隐藏") {
+                            toggleChildCommentsCollapsedState(for: comment.id)
+                        }
+                        .buttonStyle(.borderless)
+                        .font(.system(size: z(12), weight: .medium))
+                    }
+
+                    if !isCollapsed {
+                        ForEach(children) { child in
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(child.authorName)
+                                    .font(.system(size: z(14), weight: .semibold))
+                                Text(child.plainText)
+                                    .font(.system(size: z(14)))
+                                    .lineSpacing(3)
+                                if !child.imageURLs.isEmpty {
+                                    commentImages(child.imageURLs, scaleBase: z(0.95))
+                                }
+                            }
+                            .padding(.vertical, 8)
+                            .padding(.horizontal, 10)
+                            .padding(.leading, 12)
+                            .background(Color.gray.opacity(0.06))
+                            .overlay(alignment: .leading) {
+                                Rectangle()
+                                    .fill(lineColor)
+                                    .frame(width: 1)
+                                    .padding(.vertical, 6)
+                                    .padding(.leading, 4)
+                            }
+                            .cornerRadius(6)
                         }
                     }
-                    .padding(.vertical, 8)
-                    .padding(.horizontal, 10)
-                    .padding(.leading, 12)
-                    .background(Color.gray.opacity(0.06))
-                    .overlay(alignment: .leading) {
-                        Rectangle()
-                            .fill(lineColor)
-                            .frame(width: 1)
-                            .padding(.vertical, 6)
-                            .padding(.leading, 4)
-                    }
-                    .cornerRadius(6)
                 }
             } else {
-                Button("展开 \(comment.childCommentCount) 条子评论") {
-                    Task { await state.loadChildComments(for: comment.id) }
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("正在加载 \(comment.childCommentCount) 条子评论")
+                        .font(.system(size: z(13)))
+                        .foregroundStyle(.secondary)
                 }
-                .buttonStyle(.link)
+                .task(id: comment.id) {
+                    await state.loadChildComments(for: comment.id)
+                }
             }
         }
     }
@@ -850,11 +862,11 @@ private struct CommentsView: View {
         .padding(.top, 4)
     }
 
-    private func toggleCollapsedState(for commentID: String) {
-        if collapsedCommentIDs.contains(commentID) {
-            collapsedCommentIDs.remove(commentID)
+    private func toggleChildCommentsCollapsedState(for commentID: String) {
+        if collapsedChildCommentParentIDs.contains(commentID) {
+            collapsedChildCommentParentIDs.remove(commentID)
         } else {
-            collapsedCommentIDs.insert(commentID)
+            collapsedChildCommentParentIDs.insert(commentID)
         }
     }
 }

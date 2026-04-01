@@ -737,6 +737,7 @@ private struct DetailView: View {
 
 private struct CommentsView: View {
     @EnvironmentObject private var state: AppState
+    @State private var collapsedCommentIDs: Set<String> = []
     private func z(_ size: CGFloat) -> CGFloat { size * state.userZoomScale }
     private var lineColor: Color {
         Color(nsColor: NSColor(srgbRed: 234/255, green: 234/255, blue: 234/255, alpha: 1))
@@ -755,24 +756,39 @@ private struct CommentsView: View {
             }
         }
         .textSelection(.enabled)
+        .onChange(of: state.selectedItem?.id) { _, _ in
+            collapsedCommentIDs = []
+        }
     }
 
     @ViewBuilder
     private func commentCard(_ comment: CommentItem) -> some View {
+        let isCollapsed = collapsedCommentIDs.contains(comment.id)
         VStack(alignment: .leading, spacing: 6) {
-            Text(comment.authorName)
-                .font(.system(size: z(15), weight: .semibold))
-                .foregroundStyle(Color.accentColor)
-            Text(comment.plainText.isEmpty ? "（空评论）" : comment.plainText)
-                .font(.system(size: z(16)))
-                .lineSpacing(4)
-                .fixedSize(horizontal: false, vertical: true)
-
-            if !comment.imageURLs.isEmpty {
-                commentImages(comment.imageURLs, scaleBase: z(1))
+            HStack(alignment: .firstTextBaseline) {
+                Text(comment.authorName)
+                    .font(.system(size: z(15), weight: .semibold))
+                    .foregroundStyle(Color.accentColor)
+                Spacer()
+                Button(isCollapsed ? "展开" : "隐藏") {
+                    toggleCollapsedState(for: comment.id)
+                }
+                .buttonStyle(.borderless)
+                .font(.system(size: z(12), weight: .medium))
             }
 
-            childCommentsSection(for: comment)
+            if !isCollapsed {
+                Text(comment.plainText.isEmpty ? "（空评论）" : comment.plainText)
+                    .font(.system(size: z(16)))
+                    .lineSpacing(4)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if !comment.imageURLs.isEmpty {
+                    commentImages(comment.imageURLs, scaleBase: z(1))
+                }
+
+                childCommentsSection(for: comment)
+            }
         }
         .padding(12)
         .background(
@@ -832,6 +848,14 @@ private struct CommentsView: View {
             }
         }
         .padding(.top, 4)
+    }
+
+    private func toggleCollapsedState(for commentID: String) {
+        if collapsedCommentIDs.contains(commentID) {
+            collapsedCommentIDs.remove(commentID)
+        } else {
+            collapsedCommentIDs.insert(commentID)
+        }
     }
 }
 

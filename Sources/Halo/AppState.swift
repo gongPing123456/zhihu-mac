@@ -32,6 +32,7 @@ final class AppState: ObservableObject {
     private var hotListContentNextURL: String?
     private var hotListContentReachedEnd = false
     private var fullContentPrefetchingIDs: Set<String> = []
+    private var prefetchGeneration = 0
     private var lastSelectedItemIDByTab: [SidebarTab: String] = [:]
 
     private let api = ZhihuAPI()
@@ -172,11 +173,15 @@ final class AppState: ObservableObject {
         childCommentsByParent = [:]
         guard let item else { return }
         let includeLoginInfo = includeLoginInfo(for: item, in: selectedTab)
+        prefetchGeneration += 1
+        let generation = prefetchGeneration
         Task {
-            await loadComments(for: item, includeLoginInfo: includeLoginInfo)
             await loadFullContent(for: item, isForSelectedItem: true, includeLoginInfo: includeLoginInfo)
         }
-        Task { await prefetchWindowAroundSelection() }
+        Task {
+            await loadComments(for: item, includeLoginInfo: includeLoginInfo)
+        }
+        Task { await prefetchWindowAroundSelection(generation: generation) }
     }
 
     func loadComments(for item: FeedItem, includeLoginInfo: Bool = true) async {
@@ -261,21 +266,46 @@ final class AppState: ObservableObject {
         }
     }
 
-    private func prefetchWindowAroundSelection() async {
+    private func prefetchWindowAroundSelection(generation: Int) async {
         let candidates = items(for: selectedTab)
         guard !candidates.isEmpty,
               let current = selectedItem,
               let idx = candidates.firstIndex(where: { $0.id == current.id }) else {
             return
         }
+        guard generation == prefetchGeneration else { return }
 
-        let lower = max(0, idx - 2)
-        let upper = min(candidates.count - 1, idx + 7)
+        let lower = max(0, idx - 1)
+        let upper = min(candidates.count - 1, idx + 6)
         let includeLoginInfo = includeLoginInfo(for: current, in: selectedTab)
-        for i in lower ... upper {
-            let item = candidates[i]
-            let isSelected = (item.id == current.id)
-            await loadFullContent(for: item, isForSelectedItem: isSelected, includeLoginInfo: includeLoginInfo)
+
+        var orderedItems: [FeedItem] = []
+        for offset in 1 ... 4 {
+            let forwardIndex = idx + offset
+            if forwardIndex <= upper {
+                orderedItems.append(candidates[forwardIndex])
+            }
+        }
+        if idx - 1 >= lower {
+            orderedItems.append(candidates[idx - 1])
+        }
+        for offset in 5 ... 6 {
+            let forwardIndex = idx + offset
+            if forwardIndex <= upper {
+                orderedItems.append(candidates[forwardIndex])
+            }
+        }
+
+        await withTaskGroup(of: Void.self) { group in
+            for item in orderedItems {
+                group.addTask {
+                    await self.loadFullContent(
+                        for: item,
+                        isForSelectedItem: false,
+                        includeLoginInfo: includeLoginInfo
+                    )
+                }
+            }
         }
     }
 

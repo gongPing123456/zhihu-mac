@@ -173,13 +173,14 @@ final class AppState: ObservableObject {
         childCommentsByParent = [:]
         guard let item else { return }
         let includeLoginInfo = includeLoginInfo(for: item, in: selectedTab)
+        let includeLoginInfoForComments = includeLoginInfoForComments(in: selectedTab)
         prefetchGeneration += 1
         let generation = prefetchGeneration
         Task {
             await loadFullContent(for: item, isForSelectedItem: true, includeLoginInfo: includeLoginInfo)
         }
         Task {
-            await loadComments(for: item, includeLoginInfo: includeLoginInfo)
+            await loadComments(for: item, includeLoginInfo: includeLoginInfoForComments)
         }
         Task { await prefetchWindowAroundSelection(generation: generation) }
     }
@@ -199,7 +200,7 @@ final class AppState: ObservableObject {
         do {
             let children = try await api.fetchChildComments(
                 commentID: parentCommentID,
-                includeLoginInfo: selectedTab == .home ? shouldIncludeLoginInfoForHomeRequests : true
+                includeLoginInfo: includeLoginInfoForComments(in: selectedTab)
             )
             childCommentsByParent[parentCommentID] = children
         } catch {
@@ -686,6 +687,13 @@ final class AppState: ObservableObject {
     private func includeLoginInfo(for item: FeedItem, in tab: SidebarTab) -> Bool {
         if tab == .home, feedItems.contains(where: { $0.id == item.id }) {
             return shouldIncludeLoginInfoForHomeRequests
+        }
+        return true
+    }
+
+    private func includeLoginInfoForComments(in tab: SidebarTab) -> Bool {
+        if tab == .home {
+            return isLoggedIn
         }
         return true
     }

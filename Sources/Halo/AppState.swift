@@ -716,7 +716,7 @@ private struct FavoritesStore {
 private struct HomeRecommendationSuppressionStore {
     private let key = "moyu.home.recommendation.suppression"
     private let calendar = Calendar(identifier: .gregorian)
-    private let retentionDays = 7
+    private let retentionDays = 30
 
     func isSuppressed(signature: String, now: Date = Date()) -> Bool {
         let map = prunedStorage(now: now)

@@ -737,7 +737,7 @@ private struct DetailView: View {
 
 private struct CommentsView: View {
     @EnvironmentObject private var state: AppState
-    @State private var collapsedChildCommentParentIDs: Set<String> = []
+    @State private var expandedChildCommentParentIDs: Set<String> = []
     private func z(_ size: CGFloat) -> CGFloat { size * state.userZoomScale }
     private var lineColor: Color {
         Color(nsColor: NSColor(srgbRed: 234/255, green: 234/255, blue: 234/255, alpha: 1))
@@ -757,7 +757,7 @@ private struct CommentsView: View {
         }
         .textSelection(.enabled)
         .onChange(of: state.selectedItem?.id) { _, _ in
-            collapsedChildCommentParentIDs = []
+            expandedChildCommentParentIDs = []
         }
     }
 
@@ -794,7 +794,7 @@ private struct CommentsView: View {
     @ViewBuilder
     private func childCommentsSection(for comment: CommentItem) -> some View {
         if comment.childCommentCount > 0 {
-            let isCollapsed = collapsedChildCommentParentIDs.contains(comment.id)
+            let isExpanded = expandedChildCommentParentIDs.contains(comment.id)
             if let children = state.childCommentsByParent[comment.id] {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(alignment: .firstTextBaseline) {
@@ -802,14 +802,14 @@ private struct CommentsView: View {
                             .font(.system(size: z(13), weight: .medium))
                             .foregroundStyle(.secondary)
                         Spacer()
-                        Button(isCollapsed ? "展开" : "隐藏") {
-                            toggleChildCommentsCollapsedState(for: comment.id)
+                        Button(isExpanded ? "隐藏" : "展开") {
+                            toggleChildCommentsExpandedState(for: comment.id)
                         }
                         .buttonStyle(.borderless)
                         .font(.system(size: z(12), weight: .medium))
                     }
 
-                    if !isCollapsed {
+                    if isExpanded {
                         ForEach(children) { child in
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(child.authorName)
@@ -862,11 +862,11 @@ private struct CommentsView: View {
         .padding(.top, 4)
     }
 
-    private func toggleChildCommentsCollapsedState(for commentID: String) {
-        if collapsedChildCommentParentIDs.contains(commentID) {
-            collapsedChildCommentParentIDs.remove(commentID)
+    private func toggleChildCommentsExpandedState(for commentID: String) {
+        if expandedChildCommentParentIDs.contains(commentID) {
+            expandedChildCommentParentIDs.remove(commentID)
         } else {
-            collapsedChildCommentParentIDs.insert(commentID)
+            expandedChildCommentParentIDs.insert(commentID)
         }
     }
 }

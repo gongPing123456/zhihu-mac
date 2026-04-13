@@ -34,6 +34,15 @@ swift run Halo
 
 也可以直接使用 Xcode 打开 `Package.swift` 运行。
 
+## 打包
+
+```bash
+swift build --configuration release
+ditto -c -k --sequesterRsrc --keepParent .build/apple/Products/Release/Halo dist/Halo-macOS.zip
+```
+
+上述命令会在 `dist` 目录下生成 `Halo-macOS.zip`，可以直接解压后运行或在 Releases 页面上传。
+
 ## 开发说明
 
 - 项目基于 SwiftUI + Swift Package Manager。

@@ -26,6 +26,13 @@ final class AppState: ObservableObject {
     @Published var isLoadingMoreHome = false
     @Published var isLoadingMoreHotList = false
     @Published var errorMessage: String?
+    @Published var contentLoadingItemID: String?
+
+    // API 搜索结果（回车触发）
+    @Published var apiSearchResultItems: [FeedItem] = []
+    @Published var apiSearchActiveQuery: String?
+
+    private static let prefetchCount = 100
 
     private var homeNextURL: String?
     private var homeReachedEnd = false
@@ -50,11 +57,17 @@ final class AppState: ObservableObject {
     }
 
     var filteredFeedItems: [FeedItem] {
-        if activeSearchQuery != nil {
-            return searchResultItems
-        }
         guard !searchText.isEmpty else { return feedItems }
         return feedItems.filter { item in
+            item.title.localizedCaseInsensitiveContains(searchText) ||
+                item.excerpt.localizedCaseInsensitiveContains(searchText) ||
+                item.authorName.localizedCaseInsensitiveContains(searchText)
+        }
+    }
+
+    var filteredHotListContentItems: [FeedItem] {
+        guard !searchText.isEmpty else { return hotListContentItems }
+        return hotListContentItems.filter { item in
             item.title.localizedCaseInsensitiveContains(searchText) ||
                 item.excerpt.localizedCaseInsensitiveContains(searchText) ||
                 item.authorName.localizedCaseInsensitiveContains(searchText)
@@ -74,11 +87,15 @@ final class AppState: ObservableObject {
     }
 
     func items(for tab: SidebarTab) -> [FeedItem] {
+        // API 搜索模式：优先返回 API 搜索结果
+        if apiSearchActiveQuery != nil {
+            return apiSearchResultItems
+        }
         switch tab {
         case .home:
             return filteredFeedItems
         case .hotList:
-            return hotListContentItems
+            return filteredHotListContentItems
         case .hotSearch:
             return searchResultItems
         }
@@ -101,6 +118,18 @@ final class AppState: ObservableObject {
             group.addTask { await self.refreshHotList() }
             group.addTask { await self.refreshHotSearch() }
         }
+        // 首屏加载完后，预加载当前 tab 首条内容，确保 ensureSelection 时内容已就绪
+        await preloadFirstItemContent()
+    }
+
+    /// 为当前 tab 的第一条内容预加载全文，避免首屏出现 excerpt→HTML 的闪烁
+    private func preloadFirstItemContent() async {
+        let candidates = items(for: selectedTab)
+        guard let first = candidates.first else { return }
+        let includeLoginInfo = includeLoginInfo(for: first, in: selectedTab)
+        await loadFullContent(for: first, isForSelectedItem: false, includeLoginInfo: includeLoginInfo)
+        // 同时预加载评论
+        await preloadCommentsForItem(first)
     }
 
     func refreshCurrentTab() async {
@@ -166,29 +195,62 @@ final class AppState: ObservableObject {
     }
 
     func select(_ item: FeedItem?) {
-        selectedItem = item
+        selectAsync(item)
+    }
+
+    /// 异步选中：立即切换到新文章标题，内容未就绪时后台加载完后瞬间替换
+    private func selectAsync(_ item: FeedItem?) {
+        // 用 candidates 中最新版本（预加载可能已更新 htmlContent）
+        var latestItem = item
         if let item {
-            lastSelectedItemIDByTab[selectedTab] = item.id
+            let candidates = items(for: selectedTab)
+            if let fresh = candidates.first(where: { $0.id == item.id }) {
+                latestItem = fresh
+            }
         }
-        comments = []
         childCommentsByParent = [:]
-        guard let item else { return }
+        guard let item = latestItem else {
+            selectedItem = nil
+            comments = []
+            contentLoadingItemID = nil
+            return
+        }
         let includeLoginInfo = includeLoginInfo(for: item, in: selectedTab)
         let includeLoginInfoForComments = includeLoginInfoForComments(in: selectedTab)
         prefetchGeneration += 1
         let generation = prefetchGeneration
-        Task {
-            await loadFullContent(for: item, isForSelectedItem: true, includeLoginInfo: includeLoginInfo)
-        }
-        // 检查是否有预加载的评论缓存
+
+        // 立即切换：显示标题+excerpt（或已有htmlContent）
+        selectedItem = item
+        lastSelectedItemIDByTab[selectedTab] = item.id
+        contentLoadingItemID = item.htmlContent.isEmpty ? item.id : nil
+
+        // 评论：优先用缓存
         if let cachedComments = preloadedCommentsCache[item.id] {
             comments = cachedComments
         } else {
-            Task {
+            comments = []
+        }
+
+        Task {
+            // 如果内容未就绪，await 加载完后瞬间替换
+            if item.htmlContent.isEmpty {
+                await loadFullContent(for: item, isForSelectedItem: true, includeLoginInfo: includeLoginInfo)
+                // 加载完成后从缓存取最新版本
+                let candidates = items(for: selectedTab)
+                if let fresh = candidates.first(where: { $0.id == item.id }) {
+                    selectedItem = fresh
+                    contentLoadingItemID = nil
+                } else {
+                    contentLoadingItemID = nil
+                }
+            }
+            // 评论未缓存则加载
+            if preloadedCommentsCache[item.id] == nil {
                 await loadComments(for: item, includeLoginInfo: includeLoginInfoForComments)
             }
+            await prefetchWindowAroundSelection(generation: generation)
         }
-        Task { await prefetchWindowAroundSelection(generation: generation) }
     }
 
     func loadComments(for item: FeedItem, includeLoginInfo: Bool = true) async {
@@ -294,46 +356,36 @@ final class AppState: ObservableObject {
         guard generation == prefetchGeneration else { return }
 
         let lower = max(0, idx - 1)
-        let upper = min(candidates.count - 1, idx + 10)
+        let upper = min(candidates.count - 1, idx + Self.prefetchCount)
         let includeLoginInfo = includeLoginInfo(for: current, in: selectedTab)
 
-        var orderedItems: [FeedItem] = []
-        for offset in 1 ... 6 {
-            let forwardIndex = idx + offset
-            if forwardIndex <= upper {
-                orderedItems.append(candidates[forwardIndex])
-            }
-        }
-        if idx - 1 >= lower {
-            orderedItems.append(candidates[idx - 1])
-        }
-        for offset in 7 ... 10 {
-            let forwardIndex = idx + offset
-            if forwardIndex <= upper {
-                orderedItems.append(candidates[forwardIndex])
-            }
+        // 紧邻下一篇：await 确保一定加载完（翻页最可能用到）
+        if idx + 1 <= upper {
+            let nextItem = candidates[idx + 1]
+            await loadFullContent(for: nextItem, isForSelectedItem: false, includeLoginInfo: includeLoginInfo)
+            await preloadCommentsForItem(nextItem)
         }
 
-        await withTaskGroup(of: Void.self) { group in
-            for item in orderedItems {
-                group.addTask {
-                    await self.loadFullContent(
-                        for: item,
-                        isForSelectedItem: false,
-                        includeLoginInfo: includeLoginInfo
-                    )
+        // 剩余预加载 fire-and-forget
+        for offset in 2 ... Self.prefetchCount {
+            let forwardIndex = idx + offset
+            if forwardIndex <= upper {
+                let item = candidates[forwardIndex]
+                Task {
+                    await self.loadFullContent(for: item, isForSelectedItem: false, includeLoginInfo: includeLoginInfo)
+                }
+                Task {
+                    await self.preloadCommentsForItem(item)
                 }
             }
-            // 预加载后面10篇文章的评论
-            let commentUpper = min(candidates.count - 1, idx + 10)
-            for offset in 1 ... 10 {
-                let forwardIndex = idx + offset
-                if forwardIndex <= commentUpper {
-                    let item = candidates[forwardIndex]
-                    group.addTask {
-                        await self.preloadCommentsForItem(item)
-                    }
-                }
+        }
+        // 上一篇也预加载
+        if idx - 1 >= lower {
+            Task {
+                await self.loadFullContent(for: candidates[idx - 1], isForSelectedItem: false, includeLoginInfo: includeLoginInfo)
+            }
+            Task {
+                await self.preloadCommentsForItem(candidates[idx - 1])
             }
         }
     }
@@ -459,6 +511,67 @@ final class AppState: ObservableObject {
             selectedHotSearchQuery = nil
             searchResultItems = []
             ensureSelection()
+        }
+    }
+
+    /// 清空本地搜索文字（不清除已缓存的文章内容）
+    func clearLocalSearch() {
+        guard !searchText.isEmpty || apiSearchActiveQuery != nil else { return }
+        searchText = ""
+        apiSearchActiveQuery = nil
+        apiSearchResultItems = []
+        ensureSelectionAfterSearchChange()
+    }
+
+    /// 搜索文字变化回调（由 UI 调用，解决 toolbar TextField 不触发 didSet 的问题）
+    func searchTextChanged() {
+        // 如果正在 API 搜索模式中，修改搜索词则退出 API 搜索，回到本地过滤
+        if apiSearchActiveQuery != nil {
+            apiSearchActiveQuery = nil
+            apiSearchResultItems = []
+        }
+        ensureSelectionAfterSearchChange()
+    }
+
+    /// 回车提交搜索：调用知乎 API 搜索
+    func submitSearch() {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else {
+            apiSearchActiveQuery = nil
+            apiSearchResultItems = []
+            ensureSelectionAfterSearchChange()
+            return
+        }
+        apiSearchActiveQuery = query
+        isLoading = true
+        Task {
+            do {
+                let results = deduplicateFeedItems(try await api.fetchSearchResults(query: query))
+                apiSearchResultItems = results
+                errorMessage = results.isEmpty ? "未找到「\(query)」相关内容" : nil
+                ensureSelection()
+            } catch {
+                apiSearchResultItems = []
+                errorMessage = "搜索失败：\(error.localizedDescription)"
+            }
+            isLoading = false
+        }
+    }
+
+    /// 搜索文字变化后，确保选中项仍在过滤结果中
+    private func ensureSelectionAfterSearchChange() {
+        let candidates = items(for: selectedTab)
+        // 当前选中项仍在过滤结果中，无需切换
+        if let current = selectedItem, candidates.contains(where: { $0.id == current.id }) {
+            return
+        }
+        // 选中过滤结果的第一项
+        if let first = candidates.first {
+            select(first)
+        } else {
+            selectedItem = nil
+            comments = []
+            childCommentsByParent = [:]
         }
     }
 

@@ -5,6 +5,10 @@ struct HTMLWebView: NSViewRepresentable {
     let html: String
     var textScale: CGFloat = 1.0
 
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
     func makeNSView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
         let view = WKWebView(frame: .zero, configuration: config)
@@ -18,6 +22,10 @@ struct HTMLWebView: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: WKWebView, context: Context) {
+        // 内容没变就不重新加载，避免 WebView 白屏闪烁
+        let newID = contentIdentifier(html: html, textScale: textScale)
+        if context.coordinator.lastLoadedID == newID { return }
+
         let bodyFontSize = max(12, 16 * textScale)
         let normalizedHTML = normalizeImageSources(in: html)
         let content = """
@@ -98,7 +106,16 @@ struct HTMLWebView: NSViewRepresentable {
         <body>\(normalizedHTML)</body>
         </html>
         """
+        context.coordinator.lastLoadedID = newID
         nsView.loadHTMLString(content, baseURL: URL(string: "https://www.zhihu.com"))
+    }
+
+    private func contentIdentifier(html: String, textScale: CGFloat) -> String {
+        "\(html.hashValue)_\(textScale)"
+    }
+
+    class Coordinator {
+        var lastLoadedID: String?
     }
 
     private func normalizeImageSources(in html: String) -> String {

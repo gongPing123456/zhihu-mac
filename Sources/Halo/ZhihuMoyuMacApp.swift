@@ -77,15 +77,48 @@ private struct ContentView: View {
                 }
 
                 ToolbarItem(placement: .principal) {
-                    if state.selectedTab == .hotList, let progress = state.selectionProgress() {
-                        Text("\(progress.index)/\(progress.total)")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(.secondary)
-                            .monospacedDigit()
-                    } else {
-                        Text(" ")
-                            .font(.system(size: 12))
-                            .foregroundStyle(.clear)
+                    HStack(spacing: 8) {
+                        if state.selectedTab != .hotSearch {
+                            HStack(spacing: 4) {
+                                Image(systemName: "magnifyingglass")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(.secondary)
+                                TextField("搜索…", text: $state.searchText)
+                                    .textFieldStyle(.plain)
+                                    .font(.system(size: 12))
+                                    .frame(width: 120)
+                                    .onSubmit {
+                                        state.submitSearch()
+                                    }
+                                if !state.searchText.isEmpty {
+                                    Button {
+                                        state.clearLocalSearch()
+                                    } label: {
+                                        Image(systemName: "xmark.circle.fill")
+                                            .font(.system(size: 11))
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 3)
+                            .background(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .fill(Color(nsColor: .controlBackgroundColor))
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .stroke(Color.secondary.opacity(0.2), lineWidth: 0.5)
+                            )
+                        }
+
+                        if state.selectedTab == .hotList, let progress = state.selectionProgress() {
+                            Text("\(progress.index)/\(progress.total)")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(.secondary)
+                                .monospacedDigit()
+                        }
                     }
                 }
 
@@ -121,6 +154,7 @@ private struct ContentView: View {
                 }
             }
             .onChange(of: state.selectedTab) { _, _ in
+                state.clearLocalSearch()
                 state.ensureSelection()
                 if state.selectedTab == .hotList && state.hotListItems.isEmpty {
                     Task { await state.refreshHotList() }
@@ -130,6 +164,9 @@ private struct ContentView: View {
                 if state.selectedTab == .hotSearch {
                     Task { await state.ensureHotSearchDefaultLoaded() }
                 }
+            }
+            .onChange(of: state.searchText) { _, _ in
+                state.searchTextChanged()
             }
             .sheet(isPresented: $showLoginSheet, onDismiss: {
                 Task {
@@ -257,6 +294,11 @@ private struct NavigationHotkeysModifier: ViewModifier {
     private func installMonitor() {
         monitorStore.start { event in
             guard enabled else { return event }
+            // 如果当前焦点在文本输入框中，不拦截按键
+            if let firstResponder = NSApp.keyWindow?.firstResponder,
+               firstResponder is NSTextView || firstResponder is NSTextField {
+                return event
+            }
             let blockedModifiers = event.modifierFlags.intersection([.command, .option, .control, .function])
             guard blockedModifiers.isEmpty else { return event }
 
@@ -620,6 +662,15 @@ private struct DetailView: View {
                             if !item.htmlContent.isEmpty {
                                 HTMLWebView(html: item.htmlContent, textScale: state.userZoomScale)
                                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            } else if state.contentLoadingItemID == item.id {
+                                VStack(spacing: 8) {
+                                    ProgressView()
+                                        .controlSize(.regular)
+                                    Text("加载中…")
+                                        .font(.system(size: z(13)))
+                                        .foregroundStyle(.secondary)
+                                }
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
                             } else {
                                 ScrollView {
                                     Text(item.excerpt.isEmpty ? "暂无正文" : item.excerpt)
@@ -698,6 +749,15 @@ private struct DetailView: View {
             if !item.htmlContent.isEmpty {
                 HTMLWebView(html: item.htmlContent, textScale: state.userZoomScale)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if state.contentLoadingItemID == item.id {
+                VStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.regular)
+                    Text("加载中…")
+                        .font(.system(size: z(13)))
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
                     Text(item.excerpt)

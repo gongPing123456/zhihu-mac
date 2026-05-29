@@ -444,7 +444,7 @@ private struct DetailView: View {
             ) { item in
                 VStack(alignment: .leading, spacing: 6) {
                     Text(item.title)
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(.system(size: 14))
                         .lineLimit(2)
                     Text(item.excerpt.isEmpty ? "暂无摘要" : item.excerpt)
                         .font(.system(size: 12))
@@ -568,7 +568,7 @@ private struct DetailView: View {
             ) { item in
                 VStack(alignment: .leading, spacing: 6) {
                     Text(item.title)
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(.system(size: 14))
                         .lineLimit(2)
                     Text(item.excerpt.isEmpty ? "暂无摘要" : item.excerpt)
                         .font(.system(size: 12))
@@ -605,10 +605,10 @@ private struct DetailView: View {
                     }
                     if let item = state.selectedItem {
                         VStack(alignment: .leading, spacing: 8) {
-                            Text(item.title)
-                                .font(.system(size: z(15), weight: .semibold))
-                                .lineSpacing(4)
-                                .lineLimit(3)
+            Text(item.title)
+                .font(.system(size: z(13)))
+                .lineSpacing(4)
+                .lineLimit(3)
                             HStack(spacing: 8) {
                                 Text(item.authorName)
                                 Text("👍 \(item.voteCount)")
@@ -650,8 +650,6 @@ private struct DetailView: View {
                         .font(.title3.weight(.semibold))
                     ScrollView {
                         VStack(alignment: .leading, spacing: 0) {
-                            HideEnclosingScrollView()
-                                .frame(width: 0, height: 0)
                             if state.selectedItem == nil {
                                 Text("先选择文章后查看评论")
                                     .foregroundStyle(.secondary)
@@ -661,7 +659,6 @@ private struct DetailView: View {
                             }
                         }
                     }
-                    .scrollIndicators(.hidden)
                 }
                 .padding(12)
                 .frame(height: proxy.size.height * 0.44, alignment: .top)
@@ -685,9 +682,9 @@ private struct DetailView: View {
         VStack(alignment: .leading, spacing: 12) {
             (
                 Text(item.title)
-                    .font(.system(size: z(18), weight: .semibold))
+                    .font(.system(size: z(16)))
                 + Text("  \(item.authorName)  👍 \(item.voteCount)  💬 \(item.commentCount)")
-                    .font(.system(size: z(13), weight: .medium))
+                    .font(.system(size: z(13)))
                     .foregroundStyle(.secondary)
             )
             .lineSpacing(4)
@@ -719,8 +716,6 @@ private struct DetailView: View {
     private var commentsPane: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 10) {
-                HideEnclosingScrollView()
-                    .frame(width: 0, height: 0)
                 Text("评论")
                     .font(.headline)
                     .padding(.bottom, 4)
@@ -730,7 +725,6 @@ private struct DetailView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .textSelection(.enabled)
-        .scrollIndicators(.hidden)
         .background(Color(nsColor: .controlBackgroundColor))
     }
 }
@@ -765,7 +759,7 @@ private struct CommentsView: View {
     private func commentCard(_ comment: CommentItem) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(comment.authorName)
-                .font(.system(size: z(15), weight: .semibold))
+                .font(.system(size: z(16)))
                 .foregroundStyle(Color.accentColor)
 
             Text(comment.plainText.isEmpty ? "（空评论）" : comment.plainText)
@@ -813,7 +807,7 @@ private struct CommentsView: View {
                         ForEach(children) { child in
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(child.authorName)
-                                    .font(.system(size: z(14), weight: .semibold))
+                                    .font(.system(size: z(14)))
                                 Text(child.plainText)
                                     .font(.system(size: z(14)))
                                     .lineSpacing(3)

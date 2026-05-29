@@ -34,6 +34,7 @@ final class AppState: ObservableObject {
     private var fullContentPrefetchingIDs: Set<String> = []
     private var prefetchGeneration = 0
     private var lastSelectedItemIDByTab: [SidebarTab: String] = [:]
+    private var preloadedCommentsCache: [String: [CommentItem]] = [:]
 
     private let api = ZhihuAPI()
     private let favoritesStore = FavoritesStore()
@@ -179,8 +180,13 @@ final class AppState: ObservableObject {
         Task {
             await loadFullContent(for: item, isForSelectedItem: true, includeLoginInfo: includeLoginInfo)
         }
-        Task {
-            await loadComments(for: item, includeLoginInfo: includeLoginInfoForComments)
+        // 检查是否有预加载的评论缓存
+        if let cachedComments = preloadedCommentsCache[item.id] {
+            comments = cachedComments
+        } else {
+            Task {
+                await loadComments(for: item, includeLoginInfo: includeLoginInfoForComments)
+            }
         }
         Task { await prefetchWindowAroundSelection(generation: generation) }
     }
@@ -205,6 +211,17 @@ final class AppState: ObservableObject {
             childCommentsByParent[parentCommentID] = children
         } catch {
             errorMessage = "子评论加载失败：\(error.localizedDescription)"
+        }
+    }
+
+    func preloadCommentsForItem(_ item: FeedItem) async {
+        guard preloadedCommentsCache[item.id] == nil else { return }
+        let includeLoginInfoForComments = includeLoginInfoForComments(in: selectedTab)
+        do {
+            let comments = try await api.fetchRootComments(for: item, includeLoginInfo: includeLoginInfoForComments)
+            preloadedCommentsCache[item.id] = comments
+        } catch {
+            // 静默失败，不影响主流程
         }
     }
 
@@ -277,11 +294,11 @@ final class AppState: ObservableObject {
         guard generation == prefetchGeneration else { return }
 
         let lower = max(0, idx - 1)
-        let upper = min(candidates.count - 1, idx + 6)
+        let upper = min(candidates.count - 1, idx + 10)
         let includeLoginInfo = includeLoginInfo(for: current, in: selectedTab)
 
         var orderedItems: [FeedItem] = []
-        for offset in 1 ... 4 {
+        for offset in 1 ... 6 {
             let forwardIndex = idx + offset
             if forwardIndex <= upper {
                 orderedItems.append(candidates[forwardIndex])
@@ -290,7 +307,7 @@ final class AppState: ObservableObject {
         if idx - 1 >= lower {
             orderedItems.append(candidates[idx - 1])
         }
-        for offset in 5 ... 6 {
+        for offset in 7 ... 10 {
             let forwardIndex = idx + offset
             if forwardIndex <= upper {
                 orderedItems.append(candidates[forwardIndex])
@@ -305,6 +322,17 @@ final class AppState: ObservableObject {
                         isForSelectedItem: false,
                         includeLoginInfo: includeLoginInfo
                     )
+                }
+            }
+            // 预加载后面10篇文章的评论
+            let commentUpper = min(candidates.count - 1, idx + 10)
+            for offset in 1 ... 10 {
+                let forwardIndex = idx + offset
+                if forwardIndex <= commentUpper {
+                    let item = candidates[forwardIndex]
+                    group.addTask {
+                        await self.preloadCommentsForItem(item)
+                    }
                 }
             }
         }

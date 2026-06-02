@@ -51,7 +51,10 @@ struct HTMLWebView: NSViewRepresentable {
                 .RichText div {
                     max-width: none !important;
                 }
-                img { max-width: 100%; height: auto; border-radius: 8px; }
+                img:hover { box-shadow: 0 4px 20px rgba(0,0,0,0.15) !important; }
+                #img-preview-overlay { display: none; position: fixed; inset: 0; z-index: 99999; background: rgba(0,0,0,0.85); cursor: zoom-out; justify-content: center; align-items: center; }
+                #img-preview-overlay.active { display: flex; }
+                #img-preview-overlay img { max-width: 90vw; max-height: 90vh; width: auto; height: auto; border-radius: 8px; cursor: zoom-out; }
                 pre { white-space: pre-wrap; background: #f3f4f6; padding: 10px; border-radius: 6px; overflow-x: auto; }
                 blockquote { border-left: 3px solid #4b5563; margin: 10px 0; padding: 8px 12px; color: #374151; background: #f3f4f6; border-radius: 6px; }
                 a { color: #2563eb; text-decoration: none; }
@@ -62,23 +65,69 @@ struct HTMLWebView: NSViewRepresentable {
             </style>
             <script>
                 document.addEventListener('DOMContentLoaded', function () {
-                    var imgs = document.querySelectorAll('img');
-                    imgs.forEach(function (img) {
+                    // 创建预览浮层
+                    var overlay = document.createElement('div');
+                    overlay.id = 'img-preview-overlay';
+                    var previewImg = document.createElement('img');
+                    overlay.appendChild(previewImg);
+                    document.body.appendChild(overlay);
+
+                    overlay.addEventListener('click', function () {
+                        overlay.classList.remove('active');
+                    });
+
+                    function fixSrc(img) {
                         var real = img.getAttribute('data-original')
                             || img.getAttribute('data-actualsrc')
                             || img.getAttribute('data-src')
                             || img.getAttribute('data-default-watermark-src')
                             || img.getAttribute('src');
-                        if (!real) return;
+                        if (!real) return null;
                         if (real.startsWith('//')) real = 'https:' + real;
+                        return real;
+                    }
+
+                    // 处理所有图片
+                    var imgs = document.querySelectorAll('img');
+                    imgs.forEach(function (img) {
+                        var real = fixSrc(img);
+                        if (!real) return;
                         img.setAttribute('src', real);
                         img.setAttribute('referrerpolicy', 'no-referrer');
                         img.setAttribute('loading', 'eager');
-                        // 移除可能导致隐藏的 class
+                        // 清除属性
+                        img.removeAttribute('width');
+                        img.removeAttribute('height');
+                        img.removeAttribute('data-size');
+                        img.removeAttribute('data-rawwidth');
+                        img.removeAttribute('data-rawheight');
+                        // 用 JS 强制设置尺寸，覆盖所有 CSS/内联样式
+                        img.style.setProperty('max-width', '40%', 'important');
+                        img.style.setProperty('width', 'auto', 'important');
+                        img.style.setProperty('height', 'auto', 'important');
+                        img.style.setProperty('display', 'block', 'important');
+                        img.style.setProperty('border-radius', '6px', 'important');
+                        img.style.setProperty('cursor', 'zoom-in', 'important');
+                        // 清除父元素的固定尺寸
+                        var parent = img.parentElement;
+                        if (parent) {
+                            parent.style.setProperty('width', 'auto', 'important');
+                            parent.style.setProperty('max-width', '40%', 'important');
+                        }
                         if (img.classList.contains('origin_image')) {
                             img.classList.remove('origin_image');
                         }
+                        img.addEventListener('click', function (e) {
+                            e.stopPropagation();
+                            previewImg.src = img.getAttribute('data-full-src') || real;
+                            previewImg.style.setProperty('max-width', '90vw', 'important');
+                            previewImg.style.setProperty('max-height', '90vh', 'important');
+                            previewImg.style.setProperty('width', 'auto', 'important');
+                            previewImg.style.setProperty('height', 'auto', 'important');
+                            overlay.classList.add('active');
+                        });
                     });
+
                     // 处理 noscript 中的图片
                     var noscripts = document.querySelectorAll('noscript');
                     noscripts.forEach(function (ns) {
@@ -86,16 +135,20 @@ struct HTMLWebView: NSViewRepresentable {
                         div.innerHTML = ns.textContent || ns.innerHTML;
                         var nestedImgs = div.querySelectorAll('img');
                         nestedImgs.forEach(function (img) {
-                            var real = img.getAttribute('data-original')
-                                || img.getAttribute('data-actualsrc')
-                                || img.getAttribute('data-src')
-                                || img.getAttribute('data-default-watermark-src')
-                                || img.getAttribute('src');
+                            var real = fixSrc(img);
                             if (!real) return;
-                            if (real.startsWith('//')) real = 'https:' + real;
                             img.setAttribute('src', real);
                             img.setAttribute('referrerpolicy', 'no-referrer');
                             img.setAttribute('loading', 'eager');
+                            img.removeAttribute('width');
+                            img.removeAttribute('height');
+                            img.style.width = 'auto';
+                            img.style.height = 'auto';
+                            img.addEventListener('click', function (e) {
+                                e.stopPropagation();
+                                previewImg.src = img.getAttribute('data-full-src') || real;
+                                overlay.classList.add('active');
+                            });
                             ns.parentNode.insertBefore(img, ns);
                         });
                         ns.remove();
@@ -159,6 +212,15 @@ struct HTMLWebView: NSViewRepresentable {
             var injected = setOrReplace(attribute: "src", value: src, in: tag)
             injected = setOrReplace(attribute: "referrerpolicy", value: "no-referrer", in: injected)
             injected = setOrReplace(attribute: "loading", value: "eager", in: injected)
+            injected = setOrReplace(attribute: "data-full-src", value: src, in: injected)
+            // 清除内联宽高属性
+            injected = removeAttribute("width", in: injected)
+            injected = removeAttribute("height", in: injected)
+            injected = removeAttribute("data-size", in: injected)
+            injected = removeAttribute("data-rawwidth", in: injected)
+            injected = removeAttribute("data-rawheight", in: injected)
+            // 清除 style 中的 width/height
+            injected = removeStyleProperties(injected, properties: ["width", "height", "max-width", "max-height"])
             output.replaceSubrange(matchRange, with: injected)
         }
         return output
@@ -208,6 +270,47 @@ struct HTMLWebView: NSViewRepresentable {
             }
         }
         return tag.replacingOccurrences(of: ">", with: #" \#(attribute)="\#(value)">"#)
+    }
+
+    private func removeAttribute(_ attribute: String, in tag: String) -> String {
+        let escaped = NSRegularExpression.escapedPattern(for: attribute)
+        let patterns: [String] = [
+            #"\b"# + escaped + #"\s*=\s*"[^"]*""#,
+            #"\b"# + escaped + #"\s*=\s*'[^']*'"#,
+            #"\b"# + escaped + #"\s*=\s*[^\s>]+"#
+        ]
+        var result = tag
+        for pattern in patterns {
+            if let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) {
+                let range = NSRange(location: 0, length: result.utf16.count)
+                result = regex.stringByReplacingMatches(in: result, options: [], range: range, withTemplate: "")
+            }
+        }
+        return result
+    }
+
+    private func removeStyleProperties(_ tag: String, properties: [String]) -> String {
+        // 提取 style 属性值
+        let stylePattern = #"\bstyle\s*=\s*"([^"]*)""#
+        guard let regex = try? NSRegularExpression(pattern: stylePattern, options: [.caseInsensitive]),
+              let match = regex.firstMatch(in: tag, options: [], range: NSRange(location: 0, length: tag.utf16.count)),
+              match.numberOfRanges >= 2,
+              let valueRange = Range(match.range(at: 1), in: tag) else {
+            return tag
+        }
+        var style = String(tag[valueRange])
+        for prop in properties {
+            let propPattern = NSRegularExpression.escapedPattern(for: prop) + #"\s*:\s*[^;]+;?\s*"#
+            if let propRegex = try? NSRegularExpression(pattern: propPattern, options: [.caseInsensitive]) {
+                style = propRegex.stringByReplacingMatches(in: style, options: [], range: NSRange(location: 0, length: style.utf16.count), withTemplate: "")
+            }
+        }
+        let trimmed = style.trimmingCharacters(in: .whitespaces)
+        if trimmed.isEmpty {
+            // style 为空，移除整个 style 属性
+            return removeAttribute("style", in: tag)
+        }
+        return setOrReplace(attribute: "style", value: trimmed, in: tag)
     }
 }
 

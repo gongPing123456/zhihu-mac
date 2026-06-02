@@ -78,7 +78,7 @@ private struct ContentView: View {
 
                 ToolbarItem(placement: .principal) {
                     HStack(spacing: 8) {
-                        if state.selectedTab != .hotSearch {
+                        if state.selectedTab != .hotSearch && state.selectedTab != .hotList {
                             HStack(spacing: 4) {
                                 Image(systemName: "magnifyingglass")
                                     .font(.system(size: 11))
@@ -662,15 +662,6 @@ private struct DetailView: View {
                             if !item.htmlContent.isEmpty {
                                 HTMLWebView(html: item.htmlContent, textScale: state.userZoomScale)
                                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            } else if state.contentLoadingItemID == item.id {
-                                VStack(spacing: 8) {
-                                    ProgressView()
-                                        .controlSize(.regular)
-                                    Text("加载中…")
-                                        .font(.system(size: z(13)))
-                                        .foregroundStyle(.secondary)
-                                }
-                                .frame(maxWidth: .infinity, maxHeight: .infinity)
                             } else {
                                 ScrollView {
                                     Text(item.excerpt.isEmpty ? "暂无正文" : item.excerpt)
@@ -749,15 +740,6 @@ private struct DetailView: View {
             if !item.htmlContent.isEmpty {
                 HTMLWebView(html: item.htmlContent, textScale: state.userZoomScale)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if state.contentLoadingItemID == item.id {
-                VStack(spacing: 8) {
-                    ProgressView()
-                        .controlSize(.regular)
-                    Text("加载中…")
-                        .font(.system(size: z(13)))
-                        .foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
                     Text(item.excerpt)

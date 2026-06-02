@@ -39,7 +39,7 @@ final class AppState: ObservableObject {
     private var hotListContentNextURL: String?
     private var hotListContentReachedEnd = false
     private var fullContentPrefetchingIDs: Set<String> = []
-    private var prefetchGeneration = 0
+    private var selectGeneration = 0
     private var lastSelectedItemIDByTab: [SidebarTab: String] = [:]
     private var preloadedCommentsCache: [String: [CommentItem]] = [:]
 
@@ -127,7 +127,13 @@ final class AppState: ObservableObject {
         let candidates = items(for: selectedTab)
         guard let first = candidates.first else { return }
         let includeLoginInfo = includeLoginInfo(for: first, in: selectedTab)
-        await loadFullContent(for: first, isForSelectedItem: false, includeLoginInfo: includeLoginInfo)
+        await loadFullContent(for: first, isForSelectedItem: true, includeLoginInfo: includeLoginInfo)
+        // 同步 selectedItem 指向最新版本（预加载已更新缓存）
+        if let current = selectedItem, current.id == first.id,
+           let fresh = items(for: selectedTab).first(where: { $0.id == first.id }) {
+            selectedItem = fresh
+            contentLoadingItemID = nil
+        }
         // 同时预加载评论
         await preloadCommentsForItem(first)
     }
@@ -195,11 +201,6 @@ final class AppState: ObservableObject {
     }
 
     func select(_ item: FeedItem?) {
-        selectAsync(item)
-    }
-
-    /// 异步选中：立即切换到新文章标题，内容未就绪时后台加载完后瞬间替换
-    private func selectAsync(_ item: FeedItem?) {
         // 用 candidates 中最新版本（预加载可能已更新 htmlContent）
         var latestItem = item
         if let item {
@@ -210,20 +211,15 @@ final class AppState: ObservableObject {
         }
         childCommentsByParent = [:]
         guard let item = latestItem else {
-            selectedItem = nil
-            comments = []
-            contentLoadingItemID = nil
-            return
+            selectedItem = nil; comments = []; contentLoadingItemID = nil; return
         }
         let includeLoginInfo = includeLoginInfo(for: item, in: selectedTab)
         let includeLoginInfoForComments = includeLoginInfoForComments(in: selectedTab)
-        prefetchGeneration += 1
-        let generation = prefetchGeneration
 
-        // 立即切换：显示标题+excerpt（或已有htmlContent）
+        // 立即切换（预加载命中则直接显示全文，否则显示摘要）
         selectedItem = item
         lastSelectedItemIDByTab[selectedTab] = item.id
-        contentLoadingItemID = item.htmlContent.isEmpty ? item.id : nil
+        contentLoadingItemID = nil
 
         // 评论：优先用缓存
         if let cachedComments = preloadedCommentsCache[item.id] {
@@ -232,34 +228,25 @@ final class AppState: ObservableObject {
             comments = []
         }
 
+        // 当前项内容+评论：独立 Task
         Task {
-            // 如果内容未就绪，await 加载完后瞬间替换
-            if item.htmlContent.isEmpty {
+            if item.htmlContent.isEmpty && !fullContentPrefetchingIDs.contains(item.id) {
                 await loadFullContent(for: item, isForSelectedItem: true, includeLoginInfo: includeLoginInfo)
-                // 加载完成后从缓存取最新版本
-                let candidates = items(for: selectedTab)
-                if let fresh = candidates.first(where: { $0.id == item.id }) {
-                    selectedItem = fresh
-                    contentLoadingItemID = nil
-                } else {
-                    contentLoadingItemID = nil
-                }
             }
-            // 评论未缓存则加载
             if preloadedCommentsCache[item.id] == nil {
                 await loadComments(for: item, includeLoginInfo: includeLoginInfoForComments)
             }
-            await prefetchWindowAroundSelection(generation: generation)
         }
+        // 预取后续内容：fire-and-forget，立即批量启动
+        prefetchWindowAroundSelection()
     }
 
     func loadComments(for item: FeedItem, includeLoginInfo: Bool = true) async {
         do {
             comments = try await api.fetchRootComments(for: item, includeLoginInfo: includeLoginInfo)
-            errorMessage = nil
         } catch {
             comments = []
-            errorMessage = "评论加载失败：\(error.localizedDescription)"
+            // 评论加载失败静默处理，不显示顶部错误条（评论是辅助内容）
         }
     }
 
@@ -272,7 +259,7 @@ final class AppState: ObservableObject {
             )
             childCommentsByParent[parentCommentID] = children
         } catch {
-            errorMessage = "子评论加载失败：\(error.localizedDescription)"
+            // 子评论加载失败静默处理
         }
     }
 
@@ -346,47 +333,29 @@ final class AppState: ObservableObject {
         }
     }
 
-    private func prefetchWindowAroundSelection(generation: Int) async {
+    private func prefetchWindowAroundSelection() {
         let candidates = items(for: selectedTab)
         guard !candidates.isEmpty,
               let current = selectedItem,
               let idx = candidates.firstIndex(where: { $0.id == current.id }) else {
             return
         }
-        guard generation == prefetchGeneration else { return }
 
-        let lower = max(0, idx - 1)
         let upper = min(candidates.count - 1, idx + Self.prefetchCount)
         let includeLoginInfo = includeLoginInfo(for: current, in: selectedTab)
 
-        // 紧邻下一篇：await 确保一定加载完（翻页最可能用到）
-        if idx + 1 <= upper {
-            let nextItem = candidates[idx + 1]
-            await loadFullContent(for: nextItem, isForSelectedItem: false, includeLoginInfo: includeLoginInfo)
-            await preloadCommentsForItem(nextItem)
-        }
-
-        // 剩余预加载 fire-and-forget
-        for offset in 2 ... Self.prefetchCount {
+        // 全部 fire-and-forget，立即返回不阻塞
+        for offset in 1 ... Self.prefetchCount {
             let forwardIndex = idx + offset
             if forwardIndex <= upper {
                 let item = candidates[forwardIndex]
-                Task {
-                    await self.loadFullContent(for: item, isForSelectedItem: false, includeLoginInfo: includeLoginInfo)
-                }
-                Task {
-                    await self.preloadCommentsForItem(item)
-                }
+                Task { await self.loadFullContent(for: item, isForSelectedItem: false, includeLoginInfo: includeLoginInfo) }
+                Task { await self.preloadCommentsForItem(item) }
             }
         }
-        // 上一篇也预加载
-        if idx - 1 >= lower {
-            Task {
-                await self.loadFullContent(for: candidates[idx - 1], isForSelectedItem: false, includeLoginInfo: includeLoginInfo)
-            }
-            Task {
-                await self.preloadCommentsForItem(candidates[idx - 1])
-            }
+        if idx - 1 >= 0 {
+            Task { await self.loadFullContent(for: candidates[idx - 1], isForSelectedItem: false, includeLoginInfo: includeLoginInfo) }
+            Task { await self.preloadCommentsForItem(candidates[idx - 1]) }
         }
     }
 
@@ -450,17 +419,35 @@ final class AppState: ObservableObject {
     private func loadMoreHomeAndAdvance(fromIndex oldLastIndex: Int) async {
         await loadMoreHome()
         let candidates = items(for: .home)
-        if candidates.count > oldLastIndex + 1 {
-            select(candidates[oldLastIndex + 1])
+        guard candidates.count > oldLastIndex + 1 else { return }
+        let target = candidates[oldLastIndex + 1]
+        // 先预取目标项及后续几篇，避免翻页时闪摘要
+        let includeLoginInfo = includeLoginInfo(for: target, in: .home)
+        await loadFullContent(for: target, isForSelectedItem: false, includeLoginInfo: includeLoginInfo)
+        // 预取后续 2 篇
+        for offset in 1...2 {
+            let idx = oldLastIndex + 1 + offset
+            if idx < candidates.count {
+                Task { await self.loadFullContent(for: candidates[idx], isForSelectedItem: false, includeLoginInfo: includeLoginInfo) }
+            }
         }
+        select(target)
     }
 
     private func loadMoreHotListAndAdvance(fromIndex oldLastIndex: Int) async {
         await loadMoreHotListContents()
         let candidates = items(for: .hotList)
-        if candidates.count > oldLastIndex + 1 {
-            select(candidates[oldLastIndex + 1])
+        guard candidates.count > oldLastIndex + 1 else { return }
+        let target = candidates[oldLastIndex + 1]
+        let includeLoginInfo = includeLoginInfo(for: target, in: .hotList)
+        await loadFullContent(for: target, isForSelectedItem: false, includeLoginInfo: includeLoginInfo)
+        for offset in 1...2 {
+            let idx = oldLastIndex + 1 + offset
+            if idx < candidates.count {
+                Task { await self.loadFullContent(for: candidates[idx], isForSelectedItem: false, includeLoginInfo: includeLoginInfo) }
+            }
         }
+        select(target)
     }
 
     func loadMoreHome() async {

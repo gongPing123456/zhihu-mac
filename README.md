@@ -91,3 +91,7 @@ hdiutil create -volname "Halo" -srcfolder dist/Halo.app -ov -format UDZO dist/Ha
 
 - 项目基于 SwiftUI + Swift Package Manager。
 - 若评论接口出现 `403`，通常是登录态失效或接口风控，建议重新扫码登录后重试。
+
+
+##  其他 
+cd /Users/gongping/Documents/随便/ZhihuMoyuMac && swift build -c release 2>&1 | tail -3 && cp .build/release/Halo .build/release/Halo.app/Contents/MacOS/Halo && open .build/release/Halo.app

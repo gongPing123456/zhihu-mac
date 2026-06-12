@@ -28,6 +28,19 @@ final class AppState: ObservableObject {
     @Published var errorMessage: String?
     @Published var contentLoadingItemID: String?
 
+    // WeRead
+    @Published var weReadBooks: [WeReadBook] = []
+    @Published var weReadCatalog: [WeReadChapter] = []
+    @Published var weReadCurrentBook: WeReadBook?
+    @Published var weReadCurrentChapterIdx: Int = 0
+    @Published var weReadChapterContent: WeReadChapterContent?
+    @Published var weReadIsLoading = false
+    @Published var weReadCookie: String?
+    @Published var weReadViewMode: WeReadViewMode = .shelf
+    @Published var weReadShowCookieSheet = false
+    @Published var weReadShowCatalog = false
+    @Published var weReadQuietMode = false
+
     // API 搜索结果（回车触发）
     @Published var apiSearchResultItems: [FeedItem] = []
     @Published var apiSearchActiveQuery: String?
@@ -46,6 +59,7 @@ final class AppState: ObservableObject {
     private let api = ZhihuAPI()
     private let favoritesStore = FavoritesStore()
     private let homeRecommendationSuppressionStore = HomeRecommendationSuppressionStore()
+    private let weReadAPI = WeReadAPI()
 
     init() {
         SessionStore.loadCookiesToSharedStorage()
@@ -54,6 +68,7 @@ final class AppState: ObservableObject {
         }
         homeReadMode = SessionStore.loadHomeReadMode()
         favoriteItems = favoritesStore.load()
+        weReadCookie = SessionStore.loadWeReadCookie()
     }
 
     var filteredFeedItems: [FeedItem] {
@@ -98,6 +113,8 @@ final class AppState: ObservableObject {
             return filteredHotListContentItems
         case .hotSearch:
             return searchResultItems
+        case .weread:
+            return []
         }
     }
 
@@ -149,6 +166,12 @@ final class AppState: ObservableObject {
         case .hotSearch:
             clearHotSearchStateForFullRefresh()
             await refreshHotSearch()
+        case .weread:
+            if weReadViewMode == .reader, let book = weReadCurrentBook {
+                openWeReadBook(book)
+            } else {
+                await fetchWeReadShelf()
+            }
         }
     }
 
@@ -679,6 +702,120 @@ final class AppState: ObservableObject {
         if selectedTab == .home {
             Task { await refreshCurrentTab() }
         }
+    }
+
+    // MARK: - WeRead
+
+    var isWeReadLoggedIn: Bool {
+        guard let cookie = weReadCookie, !cookie.isEmpty else { return false }
+        return cookie.contains("wr_skey") && cookie.contains("wr_vid")
+    }
+
+    func saveWeReadCookie(_ cookie: String) {
+        let trimmed = cookie.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        weReadCookie = trimmed
+        SessionStore.saveWeReadCookie(trimmed)
+        weReadShowCookieSheet = false
+        Task { await fetchWeReadShelf() }
+    }
+
+    func logoutWeRead() {
+        weReadCookie = nil
+        weReadBooks = []
+        weReadCatalog = []
+        weReadCurrentBook = nil
+        weReadChapterContent = nil
+        weReadViewMode = .shelf
+        SessionStore.clearWeReadCookie()
+    }
+
+    func fetchWeReadShelf() async {
+        guard let cookie = weReadCookie else { return }
+        weReadIsLoading = true
+        defer { weReadIsLoading = false }
+        do {
+            weReadBooks = try await weReadAPI.fetchShelf(cookie: cookie)
+            errorMessage = nil
+        } catch {
+            errorMessage = "书架加载失败：\(error.localizedDescription)"
+        }
+    }
+
+    func openWeReadBook(_ book: WeReadBook) {
+        guard let cookie = weReadCookie else { return }
+        weReadCurrentBook = book
+        weReadViewMode = .reader
+        weReadIsLoading = true
+        weReadCatalog = []
+        weReadCurrentChapterIdx = 0
+        weReadChapterContent = nil
+
+        Task {
+            do {
+                let catalog = try await weReadAPI.fetchChapterInfos(bookId: book.id, cookie: cookie)
+                weReadCatalog = catalog
+
+                let progressChapterUid = try await weReadAPI.fetchProgress(bookId: book.id, cookie: cookie)
+
+                if let uid = progressChapterUid, let idx = catalog.firstIndex(where: { $0.chapterUid == uid }) {
+                    weReadCurrentChapterIdx = idx
+                    await loadWeReadChapter(idx: idx, silent: true)
+                } else if !catalog.isEmpty {
+                    await loadWeReadChapter(idx: 0, silent: true)
+                }
+                weReadIsLoading = false
+            } catch {
+                errorMessage = "书籍信息加载失败：\(error.localizedDescription)"
+                weReadIsLoading = false
+            }
+        }
+    }
+
+    func loadWeReadChapter(idx: Int, silent: Bool = false) async {
+        guard let book = weReadCurrentBook, let cookie = weReadCookie else { return }
+        guard idx >= 0 && idx < weReadCatalog.count else { return }
+
+        weReadIsLoading = true
+        weReadCurrentChapterIdx = idx
+
+        do {
+            let chapter = weReadCatalog[idx]
+            let content = try await weReadAPI.fetchChapterContent(bookId: book.id, chapterUid: chapter.chapterUid, cookie: cookie)
+            weReadChapterContent = content
+            weReadIsLoading = false
+
+            // Cache content locally
+            WeReadChapterCache.save(bookId: book.id, chapterUid: chapter.chapterUid, content: content)
+
+            // Report reading progress (fire-and-forget)
+            if !silent {
+                Task {
+                    do {
+                        let readerToken = try await weReadAPI.reportReadInit(bookId: book.id, chapterUid: chapter.chapterUid, format: content.format, cookie: cookie)
+                        if let readerToken {
+                            try await weReadAPI.reportRead(bookId: book.id, chapterUid: chapter.chapterUid, format: content.format, readerToken: readerToken, cookie: cookie)
+                        }
+                    } catch { }
+                }
+            }
+        } catch {
+            // Try cache on failure
+            let chapter = weReadCatalog[idx]
+            if let cached = WeReadChapterCache.load(bookId: book.id, chapterUid: chapter.chapterUid) {
+                weReadChapterContent = cached
+                weReadIsLoading = false
+            } else {
+                errorMessage = "章节加载失败：\(error.localizedDescription)"
+                weReadIsLoading = false
+            }
+        }
+    }
+
+    func weReadMoveChapter(step: Int) {
+        let newIdx = weReadCurrentChapterIdx + step
+        guard newIdx >= 0 && newIdx < weReadCatalog.count else { return }
+        Task { await loadWeReadChapter(idx: newIdx) }
     }
 
     var shouldIncludeLoginInfoForHomeRequests: Bool {

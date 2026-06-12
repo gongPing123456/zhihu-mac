@@ -4,6 +4,7 @@ enum SessionStore {
     private static let cookiesKey = "moyu.zhihu.cookies"
     private static let usernameKey = "moyu.zhihu.username"
     private static let homeReadModeKey = "moyu.zhihu.homeReadMode"
+    private static let weReadCookieKey = "moyu.weread.cookie"
 
     static func saveCookies(_ cookies: [HTTPCookie]) {
         let zhihuCookies = cookies.filter { cookie in
@@ -88,5 +89,19 @@ enum SessionStore {
             return .withToken
         }
         return mode
+    }
+
+    // MARK: - WeRead Cookie
+
+    static func saveWeReadCookie(_ cookie: String) {
+        UserDefaults.standard.set(cookie, forKey: weReadCookieKey)
+    }
+
+    static func loadWeReadCookie() -> String? {
+        UserDefaults.standard.string(forKey: weReadCookieKey)
+    }
+
+    static func clearWeReadCookie() {
+        UserDefaults.standard.removeObject(forKey: weReadCookieKey)
     }
 }

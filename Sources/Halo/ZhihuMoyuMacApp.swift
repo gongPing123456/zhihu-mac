@@ -18,7 +18,7 @@ struct HaloApp: App {
         WindowGroup("Halo") {
             ContentView()
                 .environmentObject(state)
-                .frame(minWidth: 680, minHeight: 560)
+                .frame(minWidth: 320, minHeight: 240)
                 .onAppear {
                     NSApplication.shared.activate(ignoringOtherApps: true)
                 }
@@ -56,29 +56,95 @@ struct HaloApp: App {
 private struct ContentView: View {
     @EnvironmentObject private var state: AppState
     @State private var showLoginSheet = false
-    private let topTabs: [SidebarTab] = [.home, .hotList]
+    private let topTabs: [SidebarTab] = [.home, .hotList, .weread]
 
     var body: some View {
         ReaderWorkspace()
-            .background(WindowConfigurator())
+            .background(WindowConfigurator(hideTrafficLights: state.selectedTab == .weread && state.weReadQuietMode))
             .modifier(
                 NavigationHotkeysModifier(
                     enabled: !showLoginSheet,
-                    onPrevious: { state.moveSelection(step: -1) },
-                    onNext: { state.moveSelection(step: 1) }
+                    onPrevious: {
+                        if state.selectedTab == .weread && state.weReadViewMode == .reader {
+                            state.weReadMoveChapter(step: -1)
+                        } else {
+                            state.moveSelection(step: -1)
+                        }
+                    },
+                    onNext: {
+                        if state.selectedTab == .weread && state.weReadViewMode == .reader {
+                            state.weReadMoveChapter(step: 1)
+                        } else {
+                            state.moveSelection(step: 1)
+                        }
+                    },
+                    onScrollUp: {
+                        if state.selectedTab == .weread && state.weReadViewMode == .reader {
+                            NotificationCenter.default.post(name: .weReadScroll, object: nil, userInfo: ["direction": "up"])
+                        }
+                    },
+                    onScrollDown: {
+                        if state.selectedTab == .weread && state.weReadViewMode == .reader {
+                            NotificationCenter.default.post(name: .weReadScroll, object: nil, userInfo: ["direction": "down"])
+                        }
+                    }
                 )
             )
             .toolbar {
                 ToolbarItemGroup(placement: .navigation) {
-                    HomeTabControl()
-                    ForEach(topTabs.filter { $0 != .home }) { tab in
-                        TopTabButton(tab: tab)
+                    if !(state.selectedTab == .weread && state.weReadQuietMode) {
+                        HomeTabControl()
+                        ForEach(topTabs.filter { $0 != .home }) { tab in
+                            TopTabButton(tab: tab)
+                        }
                     }
                 }
 
                 ToolbarItem(placement: .principal) {
                     HStack(spacing: 8) {
-                        if state.selectedTab != .hotSearch && state.selectedTab != .hotList {
+                        if state.selectedTab == .weread {
+                            if state.weReadViewMode == .reader {
+                                HStack(spacing: 10) {
+                                    Button {
+                                        state.weReadViewMode = .shelf
+                                        state.weReadChapterContent = nil
+                                        state.weReadCurrentBook = nil
+                                    } label: {
+                                        HStack(spacing: 4) {
+                                            Image(systemName: "chevron.left")
+                                            Text("书架")
+                                        }
+                                    }
+                                    .buttonStyle(.plain)
+                                    .font(.system(size: 12))
+
+                                    Divider().frame(height: 14)
+
+                                    Button { state.decreaseZoom() } label: {
+                                        Image(systemName: "textformat.size.smaller")
+                                            .font(.system(size: 12))
+                                    }
+                                    .buttonStyle(.plain)
+                                    .help("缩小字体 (Cmd+-)")
+
+                                    Button { state.increaseZoom() } label: {
+                                        Image(systemName: "textformat.size.larger")
+                                            .font(.system(size: 12))
+                                    }
+                                    .buttonStyle(.plain)
+                                    .help("放大字体 (Cmd+=)")
+
+                                    Divider().frame(height: 14)
+
+                                    Button { state.weReadQuietMode.toggle() } label: {
+                                        Image(systemName: state.weReadQuietMode ? "eye.slash.fill" : "eye.slash")
+                                            .font(.system(size: 12))
+                                    }
+                                    .buttonStyle(.plain)
+                                    .help(state.weReadQuietMode ? "退出安静阅读" : "安静阅读")
+                                }
+                            }
+                        } else if state.selectedTab != .hotSearch && state.selectedTab != .hotList {
                             HStack(spacing: 4) {
                                 Image(systemName: "magnifyingglass")
                                     .font(.system(size: 11))
@@ -123,33 +189,50 @@ private struct ContentView: View {
                 }
 
                 ToolbarItemGroup(placement: .primaryAction) {
-                    Button("上一页") { state.moveSelection(step: -1) }
+                    if state.selectedTab == .weread && !state.weReadQuietMode {
+                        if state.isWeReadLoggedIn {
+                            HStack(spacing: 6) {
+                                Text("已登录")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.secondary)
+                                Button("退出") { state.logoutWeRead() }
+                                    .controlSize(.small)
+                            }
+                        } else {
+                            Button("设置Cookie") {
+                                state.weReadShowCookieSheet = true
+                            }
+                            .controlSize(.small)
+                        }
+                    } else if state.selectedTab != .weread {
+                        Button("上一页") { state.moveSelection(step: -1) }
+                            .controlSize(.small)
+                            .buttonStyle(.bordered)
+                        Button("下一页") { state.moveSelection(step: 1) }
+                            .controlSize(.small)
+                            .buttonStyle(.bordered)
+
+                        Button("刷新") {
+                            Task { await state.refreshCurrentTab() }
+                        }
                         .controlSize(.small)
                         .buttonStyle(.bordered)
-                    Button("下一页") { state.moveSelection(step: 1) }
-                        .controlSize(.small)
-                        .buttonStyle(.bordered)
+                        .disabled(state.isLoading || state.isLoadingMoreHome)
 
-                    Button("刷新") {
-                        Task { await state.refreshCurrentTab() }
-                    }
-                    .controlSize(.small)
-                    .buttonStyle(.bordered)
-                    .disabled(state.isLoading || state.isLoadingMoreHome)
-
-                    if state.isLoggedIn {
-                        HStack(spacing: 6) {
-                            Text(state.username)
-                                .font(.system(size: 12))
-                                .foregroundStyle(.secondary)
-                            Button("退出") { state.logout() }
-                                .controlSize(.small)
+                        if state.isLoggedIn {
+                            HStack(spacing: 6) {
+                                Text(state.username)
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.secondary)
+                                Button("退出") { state.logout() }
+                                    .controlSize(.small)
+                            }
+                        } else {
+                            Button("登录") {
+                                showLoginSheet = true
+                            }
+                            .controlSize(.small)
                         }
-                    } else {
-                        Button("登录") {
-                            showLoginSheet = true
-                        }
-                        .controlSize(.small)
                     }
                 }
             }
@@ -163,6 +246,9 @@ private struct ContentView: View {
                 }
                 if state.selectedTab == .hotSearch {
                     Task { await state.ensureHotSearchDefaultLoaded() }
+                }
+                if state.selectedTab == .weread && state.isWeReadLoggedIn && state.weReadBooks.isEmpty {
+                    Task { await state.fetchWeReadShelf() }
                 }
             }
             .onChange(of: state.searchText) { _, _ in
@@ -181,6 +267,10 @@ private struct ContentView: View {
                     }
                 })
                 .environmentObject(state)
+            }
+            .sheet(isPresented: $state.weReadShowCookieSheet) {
+                WeReadCookieSheet()
+                    .environmentObject(state)
             }
     }
 }
@@ -275,6 +365,8 @@ private struct NavigationHotkeysModifier: ViewModifier {
     let enabled: Bool
     let onPrevious: () -> Void
     let onNext: () -> Void
+    var onScrollUp: (() -> Void)? = nil
+    var onScrollDown: (() -> Void)? = nil
 
     @StateObject private var monitorStore = LocalKeyMonitorStore()
 
@@ -309,6 +401,14 @@ private struct NavigationHotkeysModifier: ViewModifier {
             }
             if key == "d" || event.keyCode == 124 {
                 onNext()
+                return nil
+            }
+            if key == "w" || event.keyCode == 126 {
+                onScrollUp?()
+                return nil
+            }
+            if key == "s" || event.keyCode == 125 {
+                onScrollDown?()
                 return nil
             }
             return event
@@ -351,22 +451,39 @@ private struct ReaderWorkspace: View {
 }
 
 private struct WindowConfigurator: NSViewRepresentable {
+    var hideTrafficLights: Bool = false
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
     func makeNSView(context: Context) -> NSView {
         let view = NSView(frame: .zero)
         DispatchQueue.main.async {
-            configureWindow(from: view)
+            configureWindow(from: view, coordinator: context.coordinator)
         }
         return view
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
         DispatchQueue.main.async {
-            configureWindow(from: nsView)
+            configureWindow(from: nsView, coordinator: context.coordinator)
+            guard let window = nsView.window ?? NSApp.keyWindow else { return }
+            let buttons: [NSWindow.ButtonType] = [.closeButton, .miniaturizeButton, .zoomButton]
+            for type in buttons {
+                window.standardWindowButton(type)?.isHidden = hideTrafficLights
+            }
         }
     }
 
-    private func configureWindow(from view: NSView) {
+    class Coordinator {
+        var configured = false
+    }
+
+    private func configureWindow(from view: NSView, coordinator: Coordinator) {
         guard let window = view.window ?? NSApp.keyWindow else { return }
+        guard !coordinator.configured else { return }
+        coordinator.configured = true
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         window.isMovableByWindowBackground = true
@@ -382,7 +499,9 @@ private struct DetailView: View {
     }
 
     var body: some View {
-        if state.selectedTab == .hotSearch {
+        if state.selectedTab == .weread {
+            weReadPane
+        } else if state.selectedTab == .hotSearch {
             hotSearchPane
         } else if state.selectedTab == .hotList {
             hotListPane
@@ -505,7 +624,7 @@ private struct DetailView: View {
             }
             .overlay {
                 if state.hotListContentItems.isEmpty {
-                    Text(state.isLoggedIn ? "先点左侧热点加载文章列表" : "该接口通常需要登录，请先点击上方“登录”")
+                    Text(state.isLoggedIn ? "先点左侧热点加载文章列表" : "该接口通常需要登录，请先点击上方【登录】")
                         .foregroundStyle(.secondary)
                 }
             }
@@ -538,7 +657,7 @@ private struct DetailView: View {
     }
 
     private func hotTwoColumnWidths(totalWidth: CGFloat) -> (left: CGFloat, right: CGFloat) {
-        // 热榜模式去掉中栏，只保留“热点 + 内容评论”
+        // 热榜模式去掉中栏，只保留"热点 + 内容评论"
         // 以比例缩放为主，窗口缩小时两栏会一起等比收缩
         let leftRatio: CGFloat = 0.20
         let left = max(120, totalWidth * leftRatio)
@@ -712,11 +831,42 @@ private struct DetailView: View {
     private var emptyHint: String {
         switch state.selectedTab {
         case .home:
-            return "暂无推荐内容，点上方“刷新”重试"
+            return "暂无推荐内容，点上方\"刷新\"重试"
         case .hotList:
-            return "暂无热榜内容，点上方“刷新”重试"
+            return "暂无热榜内容，点上方\"刷新\"重试"
         case .hotSearch:
-            return "暂无热搜，点击上方“刷新”重试"
+            return "暂无热搜，点击上方\"刷新\"重试"
+        case .weread:
+            return ""
+        }
+    }
+
+    @ViewBuilder
+    private var weReadPane: some View {
+        if !state.isWeReadLoggedIn {
+            VStack(spacing: 20) {
+                Spacer()
+                Image(systemName: "book")
+                    .font(.system(size: 48))
+                    .foregroundStyle(.secondary)
+                Text("请先设置微信读书 Cookie")
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+                Text("在浏览器打开 weread.qq.com，登录后从开发者工具中复制 Cookie")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .multilineTextAlignment(.center)
+                Button("设置 Cookie") {
+                    state.weReadShowCookieSheet = true
+                }
+                .buttonStyle(.borderedProminent)
+                Spacer()
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if state.weReadViewMode == .reader {
+            WeReadReaderView(state: state)
+        } else {
+            WeReadShelfView(state: state)
         }
     }
 
@@ -953,6 +1103,51 @@ private struct HoverZoomAsyncImage: View {
                 .stroke(Color.secondary.opacity(0.12), lineWidth: 0.8)
         )
         .clipped()
+    }
+}
+
+private struct WeReadCookieSheet: View {
+    @EnvironmentObject private var state: AppState
+    @Environment(\.dismiss) private var dismiss
+    @State private var cookieText = ""
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Text("设置微信读书 Cookie")
+                .font(.headline)
+
+            Text("在浏览器打开 weread.qq.com 并登录，然后从开发者工具 (F12) → Network → 任意请求的 Request Headers 中复制 Cookie 字段")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+
+            TextEditor(text: $cookieText)
+                .font(.system(size: 12, design: .monospaced))
+                .frame(height: 120)
+                .border(Color.secondary.opacity(0.3))
+
+            Text("需要包含 wr_skey 和 wr_vid")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+
+            HStack {
+                Button("取消") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Spacer()
+                Button("保存") {
+                    state.saveWeReadCookie(cookieText)
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(cookieText.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+        .padding(20)
+        .frame(width: 480)
+        .onAppear {
+            if let existing = state.weReadCookie {
+                cookieText = existing
+            }
+        }
     }
 }
 

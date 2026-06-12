@@ -56,8 +56,36 @@ enum SidebarTab: String, CaseIterable, Identifiable {
     case home = "首页"
     case hotSearch = "热搜"
     case hotList = "热榜"
+    case weread = "微信"
 
     var id: String { rawValue }
+}
+
+struct WeReadBook: Identifiable, Codable {
+    let id: String  // bookId
+    let title: String
+    let cover: String
+    let readUpdateTime: Int?
+
+    var coverURL: URL? { URL(string: cover) }
+}
+
+struct WeReadChapter: Identifiable {
+    let id: Int  // chapterUid
+    let chapterUid: Int
+    let title: String
+    let level: Int
+}
+
+struct WeReadChapterContent {
+    let html: String
+    let style: String
+    let format: String
+}
+
+enum WeReadViewMode {
+    case shelf
+    case reader
 }
 
 enum HomeReadMode: String, CaseIterable, Codable, Identifiable {

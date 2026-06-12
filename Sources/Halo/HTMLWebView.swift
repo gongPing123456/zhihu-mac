@@ -32,7 +32,7 @@ struct HTMLWebView: NSViewRepresentable {
         <html>
         <head>
             <meta charset="utf-8"/>
-            <meta name="referrer" content="no-referrer"/>
+            <meta name="referrer" content="no-referrer-when-downgrade"/>
             <style>
                 body { font-family: -apple-system; font-size: \(bodyFontSize)px; line-height: 1.7; color: #1f2937; margin: 0; padding: 0; }
                 /* 强制覆盖知乎正文默认窄版容器，避免在某些窗口比例下看起来不铺满 */
@@ -77,11 +77,12 @@ struct HTMLWebView: NSViewRepresentable {
                     });
 
                     function fixSrc(img) {
-                        var real = img.getAttribute('data-original')
+                        // 优先用 src（通常是大图），data 属性多为缩略图
+                        var real = img.getAttribute('src')
+                            || img.getAttribute('data-original')
                             || img.getAttribute('data-actualsrc')
                             || img.getAttribute('data-src')
-                            || img.getAttribute('data-default-watermark-src')
-                            || img.getAttribute('src');
+                            || img.getAttribute('data-default-watermark-src');
                         if (!real) return null;
                         if (real.startsWith('//')) real = 'https:' + real;
                         return real;
@@ -93,7 +94,6 @@ struct HTMLWebView: NSViewRepresentable {
                         var real = fixSrc(img);
                         if (!real) return;
                         img.setAttribute('src', real);
-                        img.setAttribute('referrerpolicy', 'no-referrer');
                         img.setAttribute('loading', 'eager');
                         // 清除属性
                         img.removeAttribute('width');
@@ -138,7 +138,6 @@ struct HTMLWebView: NSViewRepresentable {
                             var real = fixSrc(img);
                             if (!real) return;
                             img.setAttribute('src', real);
-                            img.setAttribute('referrerpolicy', 'no-referrer');
                             img.setAttribute('loading', 'eager');
                             img.removeAttribute('width');
                             img.removeAttribute('height');
@@ -210,7 +209,6 @@ struct HTMLWebView: NSViewRepresentable {
             src = src.replacingOccurrences(of: "&amp;", with: "&")
 
             var injected = setOrReplace(attribute: "src", value: src, in: tag)
-            injected = setOrReplace(attribute: "referrerpolicy", value: "no-referrer", in: injected)
             injected = setOrReplace(attribute: "loading", value: "eager", in: injected)
             injected = setOrReplace(attribute: "data-full-src", value: src, in: injected)
             // 清除内联宽高属性

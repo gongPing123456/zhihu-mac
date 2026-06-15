@@ -40,6 +40,7 @@ final class AppState: ObservableObject {
     @Published var weReadShowCookieSheet = false
     @Published var weReadShowCatalog = false
     @Published var weReadQuietMode = false
+    private var weReadBookFormat: String?
 
     // API 搜索结果（回车触发）
     @Published var apiSearchResultItems: [FeedItem] = []
@@ -731,11 +732,17 @@ final class AppState: ObservableObject {
     }
 
     func fetchWeReadShelf() async {
+        // Load cached shelf first
+        if weReadBooks.isEmpty, let cached = WeReadChapterCache.loadShelf() {
+            weReadBooks = cached
+        }
         guard let cookie = weReadCookie else { return }
         weReadIsLoading = true
         defer { weReadIsLoading = false }
         do {
-            weReadBooks = try await weReadAPI.fetchShelf(cookie: cookie)
+            let books = try await weReadAPI.fetchShelf(cookie: cookie)
+            weReadBooks = books
+            WeReadChapterCache.saveShelf(books)
             errorMessage = nil
         } catch {
             errorMessage = "书架加载失败：\(error.localizedDescription)"
@@ -743,20 +750,62 @@ final class AppState: ObservableObject {
     }
 
     func openWeReadBook(_ book: WeReadBook) {
-        guard let cookie = weReadCookie else { return }
         weReadCurrentBook = book
         weReadViewMode = .reader
         weReadIsLoading = true
         weReadCatalog = []
         weReadCurrentChapterIdx = 0
         weReadChapterContent = nil
+        weReadBookFormat = nil
+
+        // Try cached catalog first
+        if let cached = WeReadChapterCache.loadCatalog(bookId: book.id) {
+            weReadCatalog = cached.catalog
+            weReadBookFormat = cached.format
+            // Load first cached chapter immediately
+            if !cached.catalog.isEmpty {
+                Task { await loadWeReadChapter(idx: 0, silent: true) }
+            }
+            weReadIsLoading = false
+            // Still pre-fetch uncached chapters if cookie available
+            if let cookie = weReadCookie {
+                preFetchAllChapters(bookId: book.id, format: cached.format, cookie: cookie)
+            }
+            return
+        }
+
+        guard let cookie = weReadCookie else { return }
 
         Task {
             do {
-                let catalog = try await weReadAPI.fetchChapterInfos(bookId: book.id, cookie: cookie)
+                let format: String
+                do {
+                    format = try await weReadAPI.fetchBookInfo(bookId: book.id, cookie: cookie)
+                } catch {
+                    print("[WeRead] fetchBookInfo failed: \(error)")
+                    throw error
+                }
+                weReadBookFormat = format
+
+                let catalog: [WeReadChapter]
+                do {
+                    catalog = try await weReadAPI.fetchChapterInfos(bookId: book.id, cookie: cookie)
+                } catch {
+                    print("[WeRead] fetchChapterInfos failed: \(error)")
+                    throw error
+                }
                 weReadCatalog = catalog
 
-                let progressChapterUid = try await weReadAPI.fetchProgress(bookId: book.id, cookie: cookie)
+                // Save catalog to cache
+                WeReadChapterCache.saveCatalog(bookId: book.id, catalog: catalog, format: format)
+
+                let progressChapterUid: Int?
+                do {
+                    progressChapterUid = try await weReadAPI.fetchProgress(bookId: book.id, cookie: cookie)
+                } catch {
+                    print("[WeRead] fetchProgress failed: \(error)")
+                    progressChapterUid = nil
+                }
 
                 if let uid = progressChapterUid, let idx = catalog.firstIndex(where: { $0.chapterUid == uid }) {
                     weReadCurrentChapterIdx = idx
@@ -765,23 +814,78 @@ final class AppState: ObservableObject {
                     await loadWeReadChapter(idx: 0, silent: true)
                 }
                 weReadIsLoading = false
+
+                // Pre-fetch all remaining chapters in background
+                preFetchAllChapters(bookId: book.id, format: format, cookie: cookie)
             } catch {
-                errorMessage = "书籍信息加载失败：\(error.localizedDescription)"
+                errorMessage = "书籍加载失败：\(error.localizedDescription)"
                 weReadIsLoading = false
             }
         }
     }
 
+    private func preFetchAllChapters(bookId: String, format: String, cookie: String) {
+        Task.detached { [weak self] in
+            guard let self else { return }
+            let catalog = await self.weReadCatalog
+            let concurrency = 3
+            var index = 0
+
+            await withTaskGroup(of: Void.self) { group in
+                while index < catalog.count {
+                    // Fill up to `concurrency` concurrent tasks
+                    for _ in 0..<concurrency {
+                        guard index < catalog.count else { break }
+                        let chapter = catalog[index]
+                        index += 1
+
+                        // Skip if already cached
+                        if WeReadChapterCache.load(bookId: bookId, chapterUid: chapter.chapterUid) != nil {
+                            continue
+                        }
+
+                        group.addTask {
+                            do {
+                                let content = try await self.weReadAPI.fetchChapterContent(
+                                    bookId: bookId, chapterUid: chapter.chapterUid, format: format, cookie: cookie
+                                )
+                                WeReadChapterCache.save(bookId: bookId, chapterUid: chapter.chapterUid, content: content)
+                                print("[WeRead] Cached chapter: \(chapter.title)")
+                            } catch {
+                                print("[WeRead] Pre-fetch failed for \(chapter.title): \(error)")
+                            }
+                            // Small delay to avoid rate limiting
+                            try? await Task.sleep(nanoseconds: 200_000_000)
+                        }
+                    }
+                    // Wait for current batch before starting next
+                    for await _ in group {}
+                }
+            }
+            print("[WeRead] Pre-fetch complete for book \(bookId)")
+        }
+    }
+
     func loadWeReadChapter(idx: Int, silent: Bool = false) async {
-        guard let book = weReadCurrentBook, let cookie = weReadCookie else { return }
+        guard let book = weReadCurrentBook else { return }
         guard idx >= 0 && idx < weReadCatalog.count else { return }
 
         weReadIsLoading = true
         weReadCurrentChapterIdx = idx
 
+        let chapter = weReadCatalog[idx]
+
+        // Try cache first
+        if let cached = WeReadChapterCache.load(bookId: book.id, chapterUid: chapter.chapterUid) {
+            weReadChapterContent = cached
+            weReadIsLoading = false
+            return
+        }
+
+        guard let cookie = weReadCookie else { return }
         do {
-            let chapter = weReadCatalog[idx]
-            let content = try await weReadAPI.fetchChapterContent(bookId: book.id, chapterUid: chapter.chapterUid, cookie: cookie)
+            let format = weReadBookFormat ?? "epub"
+            let content = try await weReadAPI.fetchChapterContent(bookId: book.id, chapterUid: chapter.chapterUid, format: format, cookie: cookie)
             weReadChapterContent = content
             weReadIsLoading = false
 

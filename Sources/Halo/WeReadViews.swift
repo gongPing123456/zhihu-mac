@@ -216,6 +216,11 @@ private struct WeReadCatalogSheet: View {
                                 if state.weReadCurrentChapterIdx == idx {
                                     Image(systemName: "checkmark")
                                         .foregroundColor(.accentColor)
+                                } else if let bookId = state.weReadCurrentBook?.id,
+                                          WeReadChapterCache.isChapterCached(bookId: bookId, chapterUid: chapter.chapterUid) {
+                                    Text("已缓存")
+                                        .font(.system(size: 10))
+                                        .foregroundColor(.green)
                                 }
                             }
                             .padding(.vertical, 4)

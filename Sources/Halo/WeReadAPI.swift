@@ -57,11 +57,17 @@ actor WeReadAPI {
     func fetchBookInfo(bookId: String, cookie: String) async throws -> String {
         let url = URL(string: "\(baseURL)/web/book/info")!
         let data = try await get(url: url, query: ["bookId": bookId], cookie: cookie)
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let format = json["format"] as? String else {
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            let preview = String(data: data, encoding: .utf8)?.prefix(200) ?? "nil"
+            print("[WeReadAPI] fetchBookInfo JSON parse failed: \(preview)")
             throw WeReadAPIError.decodingFailed
         }
-        return format
+        if let format = json["format"] as? String {
+            return format
+        }
+        // format field might be missing for some books, default to epub
+        print("[WeReadAPI] fetchBookInfo no format field, keys: \(json.keys.sorted())")
+        return "epub"
     }
 
     // MARK: - Chapter Infos (catalog)
@@ -108,9 +114,7 @@ actor WeReadAPI {
 
     // MARK: - Chapter Content
 
-    func fetchChapterContent(bookId: String, chapterUid: Int, cookie: String) async throws -> WeReadChapterContent {
-        let format = try await fetchBookInfo(bookId: bookId, cookie: cookie)
-
+    func fetchChapterContent(bookId: String, chapterUid: Int, format: String, cookie: String) async throws -> WeReadChapterContent {
         if format == "epub" || format == "pdf" {
             let results = try await (
                 fetchChapterPart(bookId: bookId, chapterUid: chapterUid, part: 0, st: 0, cookie: cookie),
@@ -118,21 +122,31 @@ actor WeReadAPI {
                 fetchChapterPart(bookId: bookId, chapterUid: chapterUid, part: 2, st: 1, cookie: cookie),
                 fetchChapterPart(bookId: bookId, chapterUid: chapterUid, part: 3, st: 0, cookie: cookie)
             )
-            guard !results.0.isEmpty, !results.1.isEmpty, !results.3.isEmpty else {
+            if results.0.isEmpty || results.1.isEmpty || results.3.isEmpty {
+                print("[WeReadAPI] epub parts empty: e_0=\(results.0.count) e_1=\(results.1.count) e_3=\(results.3.count)")
                 throw WeReadAPIError.decryptFailed
             }
             let html = WeReadCrypto.dH(results.0 + results.1 + results.3)
             let style = WeReadCrypto.dS(results.2)
+            if html.isEmpty {
+                print("[WeReadAPI] epub decrypt returned empty html")
+                throw WeReadAPIError.decryptFailed
+            }
             return WeReadChapterContent(html: html, style: style, format: format)
         } else if format == "txt" {
             let results = try await (
                 fetchChapterPartTxt(bookId: bookId, chapterUid: chapterUid, part: 0, st: 0, cookie: cookie),
                 fetchChapterPartTxt(bookId: bookId, chapterUid: chapterUid, part: 1, st: 1, cookie: cookie)
             )
-            guard !results.0.isEmpty, !results.1.isEmpty else {
+            if results.0.isEmpty || results.1.isEmpty {
+                print("[WeReadAPI] txt parts empty: t_0=\(results.0.count) t_1=\(results.1.count)")
                 throw WeReadAPIError.decryptFailed
             }
             let html = WeReadCrypto.dT(results.0 + results.1)
+            if html.isEmpty {
+                print("[WeReadAPI] txt decrypt returned empty html")
+                throw WeReadAPIError.decryptFailed
+            }
             return WeReadChapterContent(html: html, style: "", format: format)
         } else {
             throw WeReadAPIError.unsupportedFormat(format)
@@ -243,7 +257,7 @@ actor WeReadAPI {
         request.setValue(WeReadCrypto.userAgent, forHTTPHeaderField: "User-Agent")
         request.setValue(cookie, forHTTPHeaderField: "Cookie")
         let (data, response) = try await session.data(for: request)
-        try checkResponse(response)
+        try checkResponse(response, data: data)
         return data
     }
 
@@ -255,17 +269,23 @@ actor WeReadAPI {
         request.setValue(cookie, forHTTPHeaderField: "Cookie")
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         let (data, response) = try await session.data(for: request)
-        try checkResponse(response)
+        try checkResponse(response, data: data)
         return data
     }
 
-    private func checkResponse(_ response: URLResponse) throws {
+    private func checkResponse(_ response: URLResponse, data: Data) throws {
         guard let http = response as? HTTPURLResponse else { return }
         if http.statusCode == 401 || http.statusCode == 403 {
             throw WeReadAPIError.authExpired
         }
         guard (200...299).contains(http.statusCode) else {
             throw WeReadAPIError.httpError(http.statusCode)
+        }
+        // Check if response is HTML (error page) instead of JSON
+        if let str = String(data: data, encoding: .utf8),
+           str.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("<") {
+            print("[WeReadAPI] Got HTML response instead of JSON from \(response.url?.path ?? ""): \(str.prefix(200))")
+            throw WeReadAPIError.decodingFailed
         }
     }
 }

@@ -391,7 +391,7 @@ private struct NavigationHotkeysModifier: ViewModifier {
                firstResponder is NSTextView || firstResponder is NSTextField {
                 return event
             }
-            let blockedModifiers = event.modifierFlags.intersection([.command, .option, .control, .function])
+            let blockedModifiers = event.modifierFlags.intersection([.command, .option, .control])
             guard blockedModifiers.isEmpty else { return event }
 
             let key = event.charactersIgnoringModifiers?.lowercased() ?? ""

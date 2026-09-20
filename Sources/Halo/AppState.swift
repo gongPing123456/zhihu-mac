@@ -376,6 +376,10 @@ final class AppState: ObservableObject {
             favoriteItems[idx] = item
             favoritesStore.save(favoriteItems)
         }
+        // 同题回答列表：切回同一回答时命中全文，避免重复请求
+        if let idx = questionAnswers.firstIndex(where: { $0.id == item.id }) {
+            questionAnswers[idx] = item
+        }
     }
 
     private func prefetchWindowAroundSelection() {
@@ -549,10 +553,13 @@ final class AppState: ObservableObject {
             return
         }
         let target = answers[targetIdx]
-        // 预取目标回答的全文与评论，避免切换时闪摘要
+        // 预取目标回答的全文与评论，避免切换时闪摘要。
+        // 注意：isForSelectedItem 必须为 true —— target 是 questionAnswers 里的 item，
+        // 不在 feedItems 等缓存列表中，只有标记为「当前选中项」才能在 loadFullContent
+        // 完成后把 selectedItem 的 htmlContent 更新为全文，否则只会显示纯文本摘要。
         let includeLoginInfo = includeLoginInfo(for: target, in: selectedTab)
         Task {
-            await loadFullContent(for: target, isForSelectedItem: false, includeLoginInfo: includeLoginInfo)
+            await loadFullContent(for: target, isForSelectedItem: true, includeLoginInfo: includeLoginInfo)
         }
         select(target)
         errorMessage = nil

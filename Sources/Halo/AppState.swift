@@ -23,6 +23,10 @@ final class AppState: ObservableObject {
     @Published var comments: [CommentItem] = []
     @Published var childCommentsByParent: [String: [CommentItem]] = [:]
     @Published var commentsRequireLogin = false
+    // 同题回答导航（↑/↓ 切换同一问题的其他回答）
+    @Published var questionAnswers: [FeedItem] = []
+    @Published var questionAnswersLoadedForID: Int64?
+    @Published var isLoadingQuestionAnswers = false
     @Published var isLoading = false
     @Published var isLoadingMoreHome = false
     @Published var isLoadingMoreHotList = false
@@ -238,6 +242,11 @@ final class AppState: ObservableObject {
         guard let item = latestItem else {
             selectedItem = nil; comments = []; contentLoadingItemID = nil; return
         }
+        // 跨问题切换时清空同题回答导航缓存；同题内切换（questionId 相同）保留缓存
+        if let loadedQID = questionAnswersLoadedForID,
+           item.questionId != loadedQID {
+            resetQuestionAnswersNavigation()
+        }
         let includeLoginInfo = includeLoginInfo(for: item, in: selectedTab)
         let includeLoginInfoForComments = includeLoginInfoForComments(in: selectedTab)
 
@@ -444,6 +453,81 @@ final class AppState: ObservableObject {
         if nextIdx != idx {
             select(candidates[nextIdx])
         }
+    }
+
+    /// 清空同题回答导航上下文（切换选中项、切换 tab、刷新时调用）。
+    func resetQuestionAnswersNavigation() {
+        questionAnswers = []
+        questionAnswersLoadedForID = nil
+    }
+
+    /// ↑/↓ 切换同一问题的其他回答。
+    /// - 首次按方向键时懒加载该问题的回答列表；
+    /// - 之后在已加载的回答列表中按顺序切换；
+    /// - 超出范围或不可用时给出轻提示（errorMessage）。
+    func navigateQuestionAnswer(step: Int) {
+        guard selectedTab != .weread else { return }
+        guard let current = selectedItem else { return }
+        guard let questionId = current.questionId, current.contentType == .answer else {
+            if step != 0 {
+                errorMessage = "当前内容没有同题回答（仅知乎回答支持 ↑/↓ 切换）"
+            }
+            return
+        }
+
+        // 若尚未加载该问题的回答列表，先异步加载，加载完成后自动跳转到相邻回答
+        if questionAnswersLoadedForID != questionId {
+            errorMessage = nil
+            isLoadingQuestionAnswers = true
+            let includeLoginInfo = includeLoginInfo(for: current, in: selectedTab)
+            Task {
+                defer { isLoadingQuestionAnswers = false }
+                do {
+                    let page = try await api.fetchQuestionFeeds(questionID: questionId, includeLoginInfo: includeLoginInfo)
+                    var answers = deduplicateFeedItems(page.items)
+                    // 只保留 answer 类型（问题 feeds 里可能混有文章/想法等）
+                    answers = answers.filter { $0.contentType == .answer }
+                    questionAnswers = answers
+                    questionAnswersLoadedForID = questionId
+                    jumpWithinQuestionAnswers(from: current.id, step: step, answers: answers)
+                } catch {
+                    errorMessage = "同题回答加载失败：\(error.localizedDescription)"
+                }
+            }
+            return
+        }
+
+        // 已加载，直接在当前回答列表中切换
+        jumpWithinQuestionAnswers(from: current.id, step: step, answers: questionAnswers)
+    }
+
+    private func jumpWithinQuestionAnswers(from currentID: String, step: Int, answers: [FeedItem]) {
+        guard !answers.isEmpty else {
+            errorMessage = "该问题暂无其他回答"
+            return
+        }
+        guard let idx = answers.firstIndex(where: { $0.id == currentID }) else {
+            // 当前选中项不在回答列表里（可能列表不含自身），退化为选中第一条/最后一条
+            if step < 0 {
+                select(answers.last)
+            } else {
+                select(answers.first)
+            }
+            return
+        }
+        let targetIdx = idx + step
+        guard targetIdx >= 0, targetIdx < answers.count else {
+            errorMessage = step > 0 ? "已是该问题最后一个回答" : "已是该问题第一个回答"
+            return
+        }
+        let target = answers[targetIdx]
+        // 预取目标回答的全文与评论，避免切换时闪摘要
+        let includeLoginInfo = includeLoginInfo(for: target, in: selectedTab)
+        Task {
+            await loadFullContent(for: target, isForSelectedItem: false, includeLoginInfo: includeLoginInfo)
+        }
+        select(target)
+        errorMessage = nil
     }
 
     private func loadMoreHomeAndAdvance(fromIndex oldLastIndex: Int) async {

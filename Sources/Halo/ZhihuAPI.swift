@@ -140,9 +140,10 @@ actor ZhihuAPI {
         return try parseHotList(data: data)
     }
 
-    func fetchQuestionFeeds(questionID: Int64, nextURL: String? = nil) async throws -> QuestionFeedPage {
+    func fetchQuestionFeeds(questionID: Int64, nextURL: String? = nil, includeLoginInfo: Bool = true) async throws -> QuestionFeedPage {
         let request = try makeRequest(
-            urlString: nextURL ?? "https://www.zhihu.com/api/v4/questions/\(questionID)/feeds?limit=20"
+            urlString: nextURL ?? "https://www.zhihu.com/api/v4/questions/\(questionID)/feeds?limit=20",
+            includeLoginInfo: includeLoginInfo
         )
         let (data, response) = try await URLSession.shared.data(for: request)
         try validate(response)

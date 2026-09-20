@@ -48,6 +48,15 @@ struct HaloApp: App {
                     .keyboardShortcut("a", modifiers: [])
                 Button("下一个（D）") { state.moveSelection(step: 1) }
                     .keyboardShortcut("d", modifiers: [])
+                Divider()
+                Button("同题上一个回答（↑）") { state.navigateQuestionAnswer(step: -1) }
+                    .keyboardShortcut(.upArrow, modifiers: [])
+                Button("同题下一个回答（↓）") { state.navigateQuestionAnswer(step: 1) }
+                    .keyboardShortcut(.downArrow, modifiers: [])
+                Button("同题上一个回答（W）") { state.navigateQuestionAnswer(step: -1) }
+                    .keyboardShortcut("w", modifiers: [])
+                Button("同题下一个回答（S）") { state.navigateQuestionAnswer(step: 1) }
+                    .keyboardShortcut("s", modifiers: [])
             }
         }
     }
@@ -78,14 +87,18 @@ private struct ContentView: View {
                             state.moveSelection(step: 1)
                         }
                     },
-                    onScrollUp: {
+                    onQuestionPrev: {
                         if state.selectedTab == .weread && state.weReadViewMode == .reader {
                             NotificationCenter.default.post(name: .weReadScroll, object: nil, userInfo: ["direction": "up"])
+                        } else {
+                            state.navigateQuestionAnswer(step: -1)
                         }
                     },
-                    onScrollDown: {
+                    onQuestionNext: {
                         if state.selectedTab == .weread && state.weReadViewMode == .reader {
                             NotificationCenter.default.post(name: .weReadScroll, object: nil, userInfo: ["direction": "down"])
+                        } else {
+                            state.navigateQuestionAnswer(step: 1)
                         }
                     }
                 )
@@ -282,6 +295,7 @@ private struct TopTabButton: View {
     var body: some View {
         Button {
             state.selectedTab = tab
+            state.resetQuestionAnswersNavigation()
             state.ensureSelection()
         } label: {
             Text(tab.rawValue)
@@ -365,8 +379,8 @@ private struct NavigationHotkeysModifier: ViewModifier {
     let enabled: Bool
     let onPrevious: () -> Void
     let onNext: () -> Void
-    var onScrollUp: (() -> Void)? = nil
-    var onScrollDown: (() -> Void)? = nil
+    var onQuestionPrev: (() -> Void)? = nil
+    var onQuestionNext: (() -> Void)? = nil
 
     @StateObject private var monitorStore = LocalKeyMonitorStore()
 
@@ -404,11 +418,11 @@ private struct NavigationHotkeysModifier: ViewModifier {
                 return nil
             }
             if key == "w" || event.keyCode == 126 {
-                onScrollUp?()
+                onQuestionPrev?()
                 return nil
             }
             if key == "s" || event.keyCode == 125 {
-                onScrollDown?()
+                onQuestionNext?()
                 return nil
             }
             return event

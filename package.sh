@@ -79,10 +79,13 @@ if [[ "$INSTALL_APP" == "1" ]]; then
     TARGET="/Applications/$APP_NAME.app"
     echo "==> Installing to $TARGET ..."
 
-    # 关闭正在运行的旧实例
-    if pgrep -x "$APP_NAME" >/dev/null 2>&1; then
+    # 关闭正在运行的旧实例。
+    # 注意：SwiftUI 应用不响应 AppleScript 的 quit 命令，osascript 方式不可靠，
+    # 必须用 pkill 强杀，否则 open 只会把旧窗口带到前台、不会加载新二进制。
+    if pgrep -f "$TARGET/Contents/MacOS/$APP_NAME" >/dev/null 2>&1 || pgrep -x "$APP_NAME" >/dev/null 2>&1; then
         echo "    closing running $APP_NAME ..."
-        osascript -e "tell application \"$APP_NAME\" to quit" 2>/dev/null || true
+        pkill -x "$APP_NAME" 2>/dev/null || true
+        pkill -f "$TARGET/Contents/MacOS/$APP_NAME" 2>/dev/null || true
         sleep 1
     fi
 

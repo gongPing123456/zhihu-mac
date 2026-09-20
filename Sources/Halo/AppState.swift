@@ -61,6 +61,10 @@ final class AppState: ObservableObject {
     private var selectGeneration = 0
     private var lastSelectedItemIDByTab: [SidebarTab: String] = [:]
     private var preloadedCommentsCache: [String: [CommentItem]] = [:]
+    // ↑/↓ 同题回答导航：记录进入同题回答前，当前选中项在推荐流中的 id。
+    // 切换到同题回答后 selectedItem 变成了 questionAnswers 里的 item（可能不在 feedItems 中），
+    // 此时按 ←/→ 需要用它作为锚点继续在推荐流里导航，否则会找不到当前项而失效。
+    private var questionNavAnchorID: String?
 
     private let api = ZhihuAPI()
     private let favoritesStore = FavoritesStore()
@@ -424,10 +428,18 @@ final class AppState: ObservableObject {
         let candidates = items(for: selectedTab)
         guard !candidates.isEmpty else { return }
         guard let current = selectedItem, let idx = candidates.firstIndex(where: { $0.id == current.id }) else {
-            // 选中项为 nil 时才恢复到第一条；若选中项存在但不在候选列表（去重/列表刷新导致），
-            // 保持当前选中项不变，避免「往下刷」时因去重错位跳回第一篇。
+            // 选中项为 nil 时恢复到第一条；
+            // 若选中项存在但不在候选列表（可能是 ↑/↓ 切到了同题回答，该回答不在推荐流里），
+            // 则用锚点项继续在推荐流里导航，避免 ←/→ 因找不到当前项而失效。
             if selectedItem == nil {
                 select(candidates.first)
+            } else if let anchorID = questionNavAnchorID,
+                      let anchorIdx = candidates.firstIndex(where: { $0.id == anchorID }) {
+                let targetIdx = min(max(0, anchorIdx + step), candidates.count - 1)
+                if targetIdx != anchorIdx {
+                    select(candidates[targetIdx])
+                    questionNavAnchorID = nil
+                }
             }
             return
         }
@@ -456,6 +468,7 @@ final class AppState: ObservableObject {
         let nextIdx = min(max(0, idx + step), candidates.count - 1)
         if nextIdx != idx {
             select(candidates[nextIdx])
+            questionNavAnchorID = nil
         }
     }
 
@@ -463,6 +476,7 @@ final class AppState: ObservableObject {
     func resetQuestionAnswersNavigation() {
         questionAnswers = []
         questionAnswersLoadedForID = nil
+        questionNavAnchorID = nil
     }
 
     /// ↑/↓ 切换同一问题的其他回答。
@@ -477,6 +491,14 @@ final class AppState: ObservableObject {
                 errorMessage = "当前内容没有同题回答（仅知乎回答支持 ↑/↓ 切换）"
             }
             return
+        }
+
+        // 首次进入同题导航（或换了问题/换了当前内容）时，记录推荐流锚点：
+        // 只有当前选中项确实在推荐流候选里时才更新锚点，避免把同题回答本身当成锚点。
+        if questionNavAnchorID == nil || questionAnswersLoadedForID != questionId {
+            if items(for: selectedTab).contains(where: { $0.id == current.id }) {
+                questionNavAnchorID = current.id
+            }
         }
 
         // 若尚未加载该问题的回答列表，先异步加载，加载完成后自动跳转到相邻回答

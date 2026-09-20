@@ -424,7 +424,11 @@ final class AppState: ObservableObject {
         let candidates = items(for: selectedTab)
         guard !candidates.isEmpty else { return }
         guard let current = selectedItem, let idx = candidates.firstIndex(where: { $0.id == current.id }) else {
-            select(candidates.first)
+            // 选中项为 nil 时才恢复到第一条；若选中项存在但不在候选列表（去重/列表刷新导致），
+            // 保持当前选中项不变，避免「往下刷」时因去重错位跳回第一篇。
+            if selectedItem == nil {
+                select(candidates.first)
+            }
             return
         }
 
@@ -531,8 +535,28 @@ final class AppState: ObservableObject {
     }
 
     private func loadMoreHomeAndAdvance(fromIndex oldLastIndex: Int) async {
+        // 记录当前选中项 id，加载更多后用它重新定位（去重可能导致索引错位）
+        let currentID = selectedItem?.id
         await loadMoreHome()
         let candidates = items(for: .home)
+
+        // 优先用 id 定位：找到当前选中项在候选列表中的位置，取它的下一项
+        if let currentID, let idx = candidates.firstIndex(where: { $0.id == currentID }),
+           idx + 1 < candidates.count {
+            let target = candidates[idx + 1]
+            let includeLoginInfo = includeLoginInfo(for: target, in: .home)
+            await loadFullContent(for: target, isForSelectedItem: false, includeLoginInfo: includeLoginInfo)
+            for offset in 1 ... 2 {
+                let preIdx = idx + 1 + offset
+                if preIdx < candidates.count {
+                    Task { await self.loadFullContent(for: candidates[preIdx], isForSelectedItem: false, includeLoginInfo: includeLoginInfo) }
+                }
+            }
+            select(target)
+            return
+        }
+
+        // 兜底：用旧索引推进（保持原行为）
         guard candidates.count > oldLastIndex + 1 else { return }
         let target = candidates[oldLastIndex + 1]
         // 先预取目标项及后续几篇，避免翻页时闪摘要
@@ -575,16 +599,34 @@ final class AppState: ObservableObject {
         isLoadingMoreHome = true
         defer { isLoadingMoreHome = false }
         do {
-            let page = try await api.fetchRecommendedFeed(
-                nextURL: next,
-                includeLoginInfo: shouldIncludeLoginInfoForHomeRequests
-            )
-            homeNextURL = page.nextURL
-            homeReachedEnd = page.isEnd
+            // 知乎推荐流接口会间歇性返回重复内容（同一 id 隔几页重新出现）。
+            // 若某一页去重后净增为 0，继续拉下一页，直到拿到新内容或真正到末尾，
+            // 避免「刷不动」或去重导致的索引错乱跳回第一篇。
+            var currentNext = next
+            for _ in 0 ..< 5 {
+                let page = try await api.fetchRecommendedFeed(
+                    nextURL: currentNext,
+                    includeLoginInfo: shouldIncludeLoginInfoForHomeRequests
+                )
+                homeNextURL = page.nextURL
+                homeReachedEnd = page.isEnd
 
-            let filteredIncoming = filterHomeRecommendations(page.items, existingItems: feedItems)
-            feedItems.append(contentsOf: filteredIncoming)
-            errorMessage = nil
+                let before = feedItems.count
+                let filteredIncoming = filterHomeRecommendations(page.items, existingItems: feedItems)
+                feedItems.append(contentsOf: filteredIncoming)
+                errorMessage = nil
+
+                // 拿到了新内容，或已到末尾，停止继续拉
+                if feedItems.count > before || page.isEnd {
+                    break
+                }
+                // 本页全是重复内容，继续拉下一页
+                guard let nextPage = page.nextURL, !nextPage.isEmpty else {
+                    homeReachedEnd = true
+                    break
+                }
+                currentNext = nextPage
+            }
         } catch {
             errorMessage = "加载更多失败：\(error.localizedDescription)"
         }

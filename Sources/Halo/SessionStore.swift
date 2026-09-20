@@ -63,6 +63,13 @@ enum SessionStore {
         return cookies.map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
     }
 
+    /// 取单个 Cookie 的值（用于 x-zse-96 签名需要 d_c0）。
+    static func cookieValue(_ name: String) -> String? {
+        HTTPCookieStorage.shared.cookies?
+            .first { $0.name == name && ($0.domain.contains("zhihu.com") || $0.domain.contains(".zhihu.com")) }?
+            .value
+    }
+
     static func clearSession() {
         UserDefaults.standard.removeObject(forKey: cookiesKey)
         UserDefaults.standard.removeObject(forKey: usernameKey)

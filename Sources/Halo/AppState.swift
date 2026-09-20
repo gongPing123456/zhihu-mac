@@ -22,6 +22,7 @@ final class AppState: ObservableObject {
     @Published var selectedItem: FeedItem?
     @Published var comments: [CommentItem] = []
     @Published var childCommentsByParent: [String: [CommentItem]] = [:]
+    @Published var commentsRequireLogin = false
     @Published var isLoading = false
     @Published var isLoadingMoreHome = false
     @Published var isLoadingMoreHotList = false
@@ -268,8 +269,13 @@ final class AppState: ObservableObject {
     func loadComments(for item: FeedItem, includeLoginInfo: Bool = true) async {
         do {
             comments = try await api.fetchRootComments(for: item, includeLoginInfo: includeLoginInfo)
+            commentsRequireLogin = false
+        } catch APIError.requiresLogin {
+            comments = []
+            commentsRequireLogin = true
         } catch {
             comments = []
+            commentsRequireLogin = false
             // 评论加载失败静默处理，不显示顶部错误条（评论是辅助内容）
         }
     }
@@ -1061,10 +1067,10 @@ final class AppState: ObservableObject {
     }
 
     private func includeLoginInfoForComments(in tab: SidebarTab) -> Bool {
-        if tab == .home {
-            return isLoggedIn
-        }
-        return true
+        // 知乎已将评论接口调整为登录后可访问。只要本地存有知乎 Cookie 就始终携带，
+        // 避免首页 tab 因 isLoggedIn 判断而漏带 Cookie 导致评论 403。
+        _ = tab
+        return SessionStore.cookieHeader()?.isEmpty == false
     }
 }
 

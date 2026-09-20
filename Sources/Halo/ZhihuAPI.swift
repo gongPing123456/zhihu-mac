@@ -5,6 +5,7 @@ enum APIError: LocalizedError {
     case invalidResponse
     case badStatus(Int)
     case serverMessage(String)
+    case requiresLogin
 
     var errorDescription: String? {
         switch self {
@@ -16,6 +17,8 @@ enum APIError: LocalizedError {
             return "请求失败，状态码：\(code)"
         case let .serverMessage(msg):
             return msg
+        case .requiresLogin:
+            return "需要登录"
         }
     }
 }
@@ -60,7 +63,7 @@ actor ZhihuAPI {
         let urlString = "https://www.zhihu.com/api/v4/comment_v5/\(path)/root_comment?limit=20"
         let request = try makeRequest(urlString: urlString, includeLoginInfo: includeLoginInfo)
         let (data, response) = try await data(for: request, includeLoginInfo: includeLoginInfo)
-        try validate(response)
+        try validateComments(response, data: data)
         let payload = try decoder.decode(CommentResponse.self, from: data)
         return payload.data.map {
             CommentItem(
@@ -106,7 +109,7 @@ actor ZhihuAPI {
         let urlString = "https://www.zhihu.com/api/v4/comment_v5/comment/\(commentID)/child_comment?limit=20"
         let request = try makeRequest(urlString: urlString, includeLoginInfo: includeLoginInfo)
         let (data, response) = try await data(for: request, includeLoginInfo: includeLoginInfo)
-        try validate(response)
+        try validateComments(response, data: data)
         let payload = try decoder.decode(CommentResponse.self, from: data)
         return payload.data.map {
             CommentItem(
@@ -165,6 +168,25 @@ actor ZhihuAPI {
         guard (200 ..< 300).contains(http.statusCode) else { throw APIError.badStatus(http.statusCode) }
     }
 
+    /// 评论接口校验：知乎已将 comment_v5 调整为登录后可访问，
+    /// 未登录/登录失效会返回 403 + code 40353（need_login）。
+    /// 这里把这种情况转成明确的 `.requiresLogin`，便于 UI 提示。
+    private func validateComments(_ response: URLResponse, data: Data) throws {
+        guard let http = response as? HTTPURLResponse else { throw APIError.invalidResponse }
+        if http.statusCode == 403 {
+            if let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let error = root["error"] as? [String: Any] {
+                let needLogin = (error["need_login"] as? Bool) ?? false
+                let code = (error["code"] as? NSNumber)?.intValue ?? 0
+                if needLogin || code == 40353 {
+                    throw APIError.requiresLogin
+                }
+            }
+            throw APIError.badStatus(http.statusCode)
+        }
+        guard (200 ..< 300).contains(http.statusCode) else { throw APIError.badStatus(http.statusCode) }
+    }
+
     private func commentPath(for item: FeedItem) -> String? {
         switch item.contentType {
         case .answer:
@@ -183,12 +205,20 @@ actor ZhihuAPI {
     private func makeRequest(urlString: String, includeLoginInfo: Bool = true) throws -> URLRequest {
         guard let url = URL(string: urlString) else { throw APIError.invalidURL }
         var request = URLRequest(url: url)
-        request.setValue("Mozilla/5.0", forHTTPHeaderField: "User-Agent")
+        request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", forHTTPHeaderField: "User-Agent")
         request.httpShouldHandleCookies = includeLoginInfo
         if includeLoginInfo, let cookie = SessionStore.cookieHeader(), !cookie.isEmpty {
             request.setValue(cookie, forHTTPHeaderField: "Cookie")
         } else {
             request.setValue(nil, forHTTPHeaderField: "Cookie")
+        }
+        // 对 www.zhihu.com/api/v4 路径的请求附加 x-zse-96 签名（知乎反爬风控）。
+        // d_c0 是签名必需参数，缺失时跳过签名（保持原行为）。
+        if url.host == "www.zhihu.com", url.path.hasPrefix("/api/v4"),
+           let dc0 = SessionStore.cookieValue("d_c0"), !dc0.isEmpty {
+            request.setValue("101_3_3.0", forHTTPHeaderField: "x-zse-93")
+            request.setValue(ZhihuSignature.zse96Header(url: urlString, dc0: dc0), forHTTPHeaderField: "x-zse-96")
+            request.setValue("fetch", forHTTPHeaderField: "x-requested-with")
         }
         return request
     }

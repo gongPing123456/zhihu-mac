@@ -932,9 +932,15 @@ private struct CommentsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             if state.comments.isEmpty {
-                Text("暂无评论或正在加载")
-                    .foregroundStyle(.secondary)
-                    .font(.system(size: z(14)))
+                if state.commentsRequireLogin {
+                    Text("评论需登录后查看，请先登录知乎账号")
+                        .foregroundStyle(.secondary)
+                        .font(.system(size: z(14)))
+                } else {
+                    Text("暂无评论或正在加载")
+                        .foregroundStyle(.secondary)
+                        .font(.system(size: z(14)))
+                }
             }
 
             ForEach(state.comments) { comment in

@@ -246,9 +246,11 @@ final class AppState: ObservableObject {
         guard let item = latestItem else {
             selectedItem = nil; comments = []; contentLoadingItemID = nil; return
         }
-        // 跨问题切换时清空同题回答导航缓存；同题内切换（questionId 相同）保留缓存
+        // 跨问题切换时清空同题回答导航缓存；同题内切换（questionId 相同）保留缓存。
+        // 注意：item.questionId 为 nil 时不视为「跨问题」，避免误清空同题回答导航与锚点。
         if let loadedQID = questionAnswersLoadedForID,
-           item.questionId != loadedQID {
+           let newQID = item.questionId,
+           newQID != loadedQID {
             resetQuestionAnswersNavigation()
         }
         let includeLoginInfo = includeLoginInfo(for: item, in: selectedTab)

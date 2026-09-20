@@ -147,7 +147,7 @@ actor ZhihuAPI {
         )
         let (data, response) = try await URLSession.shared.data(for: request)
         try validate(response)
-        return try parseQuestionFeeds(data: data)
+        return try parseQuestionFeeds(data: data, questionID: questionID)
     }
 
     func verifyLogin() async throws -> String {
@@ -378,7 +378,7 @@ actor ZhihuAPI {
         }
     }
 
-    private func parseQuestionFeeds(data: Data) throws -> QuestionFeedPage {
+    private func parseQuestionFeeds(data: Data, questionID: Int64) throws -> QuestionFeedPage {
         guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw APIError.invalidResponse
         }
@@ -399,7 +399,9 @@ actor ZhihuAPI {
             let contentId = target.int64("id") ?? 0
             guard contentId > 0 else { return nil }
             let question = target["question"] as? [String: Any]
-            let questionId = question?.int64("id")
+            // 问题 feeds 接口返回的 answer 里可能没有嵌套 question 对象，
+            // 此时用请求的 questionID 兜底，避免 questionId 为 nil 导致同题回答导航失效。
+            let questionId = question?.int64("id") ?? questionID
             let title = (question?["title"] as? String) ?? (target["title"] as? String) ?? "无标题"
             let excerpt = ((target["excerpt"] as? String) ?? "").strippingHTML()
             let htmlContent = (target["content"] as? String) ?? ""

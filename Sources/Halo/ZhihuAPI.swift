@@ -404,7 +404,10 @@ actor ZhihuAPI {
             let questionId = question?.int64("id") ?? questionID
             let title = (question?["title"] as? String) ?? (target["title"] as? String) ?? "无标题"
             let excerpt = ((target["excerpt"] as? String) ?? "").strippingHTML()
-            let htmlContent = (target["content"] as? String) ?? ""
+            // 问题 feeds 接口返回的 answer 的 content 是「截断的正文片段」（缺图片/样式/结尾），
+            // 不能当作完整全文渲染，否则正文格式错乱。这里强制置空，
+            // 让 loadFullContent 去 answers/{id}?include=content 拉取完整全文。
+            let htmlContent = ""
             let author = target["author"] as? [String: Any]
             let authorName = (author?["name"] as? String) ?? "匿名"
             let authorAvatar = (author?["avatar_url"] as? String) ?? (author?["avatarUrl"] as? String)

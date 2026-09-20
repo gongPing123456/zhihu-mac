@@ -553,14 +553,11 @@ final class AppState: ObservableObject {
             return
         }
         let target = answers[targetIdx]
-        // 预取目标回答的全文与评论，避免切换时闪摘要。
-        // 注意：isForSelectedItem 必须为 true —— target 是 questionAnswers 里的 item，
-        // 不在 feedItems 等缓存列表中，只有标记为「当前选中项」才能在 loadFullContent
-        // 完成后把 selectedItem 的 htmlContent 更新为全文，否则只会显示纯文本摘要。
-        let includeLoginInfo = includeLoginInfo(for: target, in: selectedTab)
-        Task {
-            await loadFullContent(for: target, isForSelectedItem: true, includeLoginInfo: includeLoginInfo)
-        }
+        // 直接 select(target)：select() 内部会在 selectedItem 切换到 target 之后，
+        // 用 isForSelectedItem: true 异步拉取完整全文（问题 feeds 的 answer 的 htmlContent
+        // 已在解析时置空，会走 answers/{id}?include=content 补拉全文）。
+        // 不要在这里额外启动 loadFullContent —— 那会在 select 之前就执行，
+        // 此时 selectedItem 尚未切换，导致全文加载完成后无法回写到 selectedItem（竞态）。
         select(target)
         errorMessage = nil
     }

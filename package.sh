@@ -15,10 +15,10 @@ if [[ "$1" == "install" ]]; then
 fi
 
 echo "==> Building release..."
-swift build -c release
+swift build --disable-sandbox -c release
 
 # 动态获取真实的构建产物目录（兼容不同 Swift/Xcode toolchain）
-BIN_PATH="$(swift build -c release --show-bin-path)"
+BIN_PATH="$(swift build --disable-sandbox -c release --show-bin-path)"
 BUILD_DIR="$(dirname "$BIN_PATH")"
 
 echo "==> Packaging $APP_NAME.app..."
